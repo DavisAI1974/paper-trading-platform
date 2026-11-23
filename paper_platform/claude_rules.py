@@ -147,13 +147,10 @@ class ClaudeRules:
                     departures=set(),
                 )
 
-        before = sign(t["exhaustion_before"])
         after = sign(t["exhaustion"])
-        if self.hump and before != self.hump["direction"]:
-            self.hump = None
         if not self.hump or self.hump["direction"] != after:
             self.hump = None
-            if after and before != after and t["trade"] and t["aggressor"]:
+            if after and after != sign(t["exhaustion_prior_read"]) and t["trade"] and t["aggressor"]:
                 self.hump = dict(
                     start=pos, direction=after, event=event, opposite=sign(t["dipole_before"]) == -after
                 )
@@ -313,6 +310,17 @@ class ClaudeRules:
         c = idea["conditions"]
         name = c.get("quote")
         rule = idea["rule"]
+        if rule == "CL01":
+            for fact in t["quote_facts"]:
+                if fact["quote"] != "best " + name or fact["run_start_position"] != c["run"]:
+                    continue
+                if fact["fact"] == STEP_BACK:
+                    if "third_step_reference" in idea:
+                        return "first step back after a third step in a later exchange event"
+                    return "first step back without a third step in a later exchange event"
+                if fact["moves"] == 3 and t["event"] != idea["q"]["event"]:
+                    idea["third_step_reference"] = t["reference"]
+            return None
         if rule == "CL04":
             if "run" in c:
                 return (

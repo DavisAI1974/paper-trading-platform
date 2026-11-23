@@ -9,6 +9,9 @@ import time
 from pathlib import Path
 from uuid import uuid4
 
+from crypto_ng.tick import NS
+
+from .causal_gate import check_prefix
 from .engine import Engine
 from .feed import HistoricalFeed
 from .rulebook import RULES, catalogue
@@ -28,8 +31,10 @@ def digest(path):
 
 class Session:
     def __init__(
-        self, data_root, trade_day, *, message_budget, output_budget, market_key="nymex-ng", on_event=None
+        self, data_root, trade_day, *, message_budget, output_budget, market_key="nymex-ng", on_event=None,
+        started=None,
     ):
+        self.started = time.monotonic() if started is None else started
         self.market = replay_market(market_key)
         self.data_root = Path(data_root).resolve()
         origin = git(self.data_root, "remote", "get-url", "origin").lower().removesuffix(".git")
@@ -41,7 +46,6 @@ class Session:
         if min(message_budget, output_budget) <= 0:
             raise ValueError("set positive message and event budgets")
         self.lock = threading.RLock()
-        self.started = time.monotonic()
         self.run = uuid4().hex
         self.on_event = on_event
         code = RULES.parents[1]
@@ -60,6 +64,7 @@ class Session:
         self.engine = Engine(trade_day, self.run, self.rules)
         folder = self.data_root / self.market["archive"]
         self.feed = HistoricalFeed(folder, trade_day, market_key)
+        causal_check = check_prefix(self.feed, self.rules, self.started + LIMIT_SECONDS)
         self.stream = self.feed.messages()
         self.folder = self.data_root / "paper-trading" / self.run
         self.folder.mkdir(parents=True, exist_ok=False)
@@ -75,9 +80,10 @@ class Session:
             data_commit=git(self.data_root, "rev-parse", "HEAD"),
             rule_commits=self.rule_commits,
             rule_files={k: digest(RULES / (k + ".json")) for k in self.rules},
+            causal_check=causal_check,
             constants=dict(
-                dipole_seconds=60,
-                exhaustion_seconds=20,
+                dipole_seconds=self.engine.inputs.dipole.width / NS,
+                exhaustion_seconds=self.engine.inputs.exhaustion.width / NS,
                 stop_seconds=LIMIT_SECONDS,
                 message_budget=message_budget,
                 event_budget=output_budget,
@@ -124,6 +130,40 @@ class Session:
             return "budget reached"
         return None
 
+    def _apply(self, decide, value):
+        before = self.engine.begin_decision_batch()
+        decisions = decide(value)
+        needed = sum(1 + (e["action"] in ("open", "close", "exit")) for e in decisions)
+        if time.monotonic() - self.started >= LIMIT_SECONDS:
+            self.engine.rollback_decision_batch(before)
+            self.stop("flattened at the 5.75-hour stop")
+            return False
+        if self.events + needed > self.output_budget:
+            self.engine.rollback_decision_batch(before)
+            self.stop("budget reached")
+            return False
+        for decision in decisions:
+            self.record(decision)
+        reason = self.due()
+        if reason:
+            self.stop(reason)
+        return True
+
+    def advance_clock(self, received_ns):
+        """Record a due strategy timer without consuming a feed record or message budget."""
+        with self.lock:
+            if self.state != "active":
+                return
+            reason = self.due()
+            if reason:
+                self.stop(reason)
+                return
+            try:
+                self._apply(self.engine.advance_clock, received_ns)
+            except Exception:
+                self.stop("failure")
+                raise
+
     def step(self, expected):
         with self.lock:
             if self.state != "active":
@@ -139,22 +179,16 @@ class Session:
                 if message is None:
                     self.stop("end of purchased input")
                     return None
+                if message["period"] != "vendor snapshot":
+                    received = message["raw"]["ts_recv"]
+                    while (expiry := self.engine.next_expiry_ns) is not None and expiry < received:
+                        self.advance_clock(expiry)
+                        if self.state != "active":
+                            return None
                 self.cursor = message["cursor"]
                 self.last = message
                 self.receives.write(struct.pack("<Q", message["received_by_replay_ns"]))
-                previous_positions = self.engine.open.copy()
-                decisions = self.engine.tick(message)
-                needed = sum(1 + (e["action"] in ("open", "close", "exit")) for e in decisions)
-                if self.events + needed > self.output_budget:
-                    self.engine.open = previous_positions
-                    self.stop("budget reached")
-                    return None
-                for e in decisions:
-                    self.record(e)
-                reason = self.due()
-                if reason:
-                    self.stop(reason)
-                return message
+                return message if self._apply(self.engine.tick, message) else None
             except Exception:
                 self.stop("failure")
                 raise
@@ -185,6 +219,6 @@ class Session:
                 status=self.state,
                 cursor=self.cursor,
                 events=self.events,
-                open_positions=len(self.engine.open),
+                open_positions=self.engine.position_count,
                 code_commit=self.revision,
             )

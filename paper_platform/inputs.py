@@ -20,18 +20,23 @@ class Flow:
         values, empty = line(np.array(self.size[:1]), np.array(self.size[1:]))
         self.value = None if empty[0] else float(values[0])
 
-    def expire(self, received):
-        changed = False
-        while self.trades and self.trades[0][0] + self.width <= received:
-            _, side, qty = self.trades.popleft()
-            self.size[side] -= qty
-            changed = True
-        if changed:
-            self.change()
+    @property
+    def next_expiry_ns(self):
+        return self.trades[0][0] + self.width if self.trades else None
 
-    def add(self, received, side, size):
+    def expire(self, received):
+        references = []
+        while self.trades and self.trades[0][0] + self.width <= received:
+            _, side, qty, reference = self.trades.popleft()
+            self.size[side] -= qty
+            references.append(reference)
+        if references:
+            self.change()
+        return references
+
+    def add(self, received, side, size, reference):
         key = 0 if side == "B" else 1
-        self.trades.append((received, key, size))
+        self.trades.append((received, key, size, reference))
         self.size[key] += size
         self.change()
 
@@ -55,13 +60,17 @@ class StrategyInputs:
         if self.last_received is not None and received < self.last_received:
             raise ValueError("received clock went backwards within the selected trade day")
         self.last_received = received
+        # For a sided print ROOT combines simultaneous expiry and arrival into one line read.
+        self.exhaustion.expire(received - 1)
+        prior_read = self.exhaustion.value
         for flow in (self.dipole, self.exhaustion):
             flow.expire(received)
         before = self.dipole.value, self.exhaustion.value
         trade = raw["action"] == "T"
+        reference = (message["source_sha256"], message["record_index"])
         if trade and raw["side"] in ("B", "A"):
             for flow in (self.dipole, self.exhaustion):
-                flow.add(received, raw["side"], raw["size"])
+                flow.add(received, raw["side"], raw["size"], reference)
         bid, ask = message["best_bid"], message["best_ask"]
         pos = message["position_on_tape"]
         facts = []
@@ -75,7 +84,7 @@ class StrategyInputs:
             position=pos,
             received=received,
             exchange=raw["ts_event"],
-            reference=(message["source_sha256"], message["record_index"]),
+            reference=reference,
             event=message["event_start_position"],
             bid=bid,
             ask=ask,
@@ -86,6 +95,7 @@ class StrategyInputs:
             exhaustion=self.exhaustion.value,
             dipole_before=before[0],
             exhaustion_before=before[1],
+            exhaustion_prior_read=prior_read,
             settlement=self.start <= raw["ts_event"] < self.end,
             quote_facts=[dict(zip(FACT_NAMES, fact)) for fact in facts],
             leg=self.legs.now(),

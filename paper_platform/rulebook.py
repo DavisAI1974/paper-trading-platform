@@ -1,10 +1,9 @@
 """The saved print-pair rules. All operands come from three named, already-observed rows."""
 
 import json
-from functools import cache
 import operator
+from functools import cache
 from pathlib import Path
-
 
 RULES = Path(__file__).with_name("rules")
 OPS = {
@@ -30,7 +29,7 @@ def operand(term, rows):
     return rows[name][field]
 
 
-def evaluate(conditions, rows, *, conjunction):
+def evaluate(conditions, rows, *, conjunction, require_complete=False):
     """Return decision and unavailable fields. A nontrade row cannot satisfy a print condition."""
     outcomes, missing = [], []
     for condition in conditions:
@@ -44,6 +43,8 @@ def evaluate(conditions, rows, *, conjunction):
             outcomes.append(None)
         else:
             outcomes.append(OPS[op](a, b))
+    if require_complete and missing:
+        return False, missing
     if conjunction:
         if False in outcomes:
             return False, []
@@ -73,13 +74,15 @@ def confirmation(rule, p, q):
 def management(rule, side, p, q, t):
     rows = {"p": p, "q": q, "t": t}
     closes = rule.get("directional_close", {}).get(side, rule["close_any"])
-    close, missing = evaluate(closes, rows, conjunction=False)
+    close, missing = evaluate(closes, rows, conjunction=False, require_complete=True)
+    release, gaps = evaluate(rule.get("release_any", []), rows, conjunction=False, require_complete=True)
+    if missing or gaps:
+        return None, sorted(set(missing + gaps))
     if close:
         return "exit", []
-    release, gaps = evaluate(rule.get("release_any", []), rows, conjunction=False)
-    if release and not missing:
+    if release:
         return "release warning", []
-    return None, sorted(set(missing + gaps))
+    return None, []
 
 
 def manager_action(rule, position, p, q):

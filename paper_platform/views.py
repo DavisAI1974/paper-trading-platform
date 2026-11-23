@@ -15,14 +15,11 @@ def e(value):
 
 
 def card(event, profile):
-    def prices(row):
-        def fmt(name):
-            value = row.get(name)
-            return (
-                "unavailable" if value is None else format(Decimal(str(value)) / profile["price_scale"], "f")
-            )
+    def price(value):
+        return "unavailable" if value is None else format(Decimal(str(value)) / profile["price_scale"], "f")
 
-        return f"bid {fmt('bid')} · ask {fmt('ask')} {e(profile['price_unit'])}"
+    def prices(row):
+        return f"bid {price(row.get('bid'))} · ask {price(row.get('ask'))} {e(profile['price_unit'])}"
 
     fields = [
         f"<strong>{e(' · '.join(str(event[k]) for k in ('rule', 'kind', 'action') if event.get(k)))}</strong>",
@@ -32,10 +29,18 @@ def card(event, profile):
         fields.append(f"<small>Entry · {prices(event['entry'])} · {e(event['entry']['received'])} ns</small>")
     if "bid" in event or "ask" in event:
         fields.append(f"<small>At decision · {prices(event)}</small>")
+    if event.get("print_price") is not None:
+        fields.append(
+            f"<small>Print {price(event['print_price'])} · Reference print {price(event.get('reference_price'))}"
+            f" {e(profile['price_unit'])}</small>"
+        )
+    is_clock_event = event.get("expiry_references") and event.get("exchange") is None
+    time_label = "Window expiry (ns)" if is_clock_event else "Tape receive time (ns)"
     for field, label in [
+        ("price_response", "Print response"),
         ("entry_rule", "Opened by"),
         ("trade_id", "Trade"),
-        ("received", "Tape receive time (ns)"),
+        ("received", time_label),
     ]:
         if event.get(field) is not None:
             fields.append(f"<small>{label} · {e(event[field])}</small>")

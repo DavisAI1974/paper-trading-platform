@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 
 import requests
 from .api import wire
+from .causal_gate import PreflightDeadline
 from .session import Session
 from root.calendar import trade_day_bounds
 
@@ -122,7 +123,27 @@ class Publication:
             raise RuntimeError("Render journal recovery failed")
 
 
+def pace_to_record(session, received, base, stopped, publication, deliver):
+    """Release due timers against the tape clock even when there is no intervening print."""
+    while session.state == "active" and not stopped.is_set() and not session.due():
+        with session.lock:
+            expiry = session.engine.next_expiry_ns
+        timer_first = expiry is not None and expiry < received
+        target = expiry if timer_first else received
+        remaining = base + target - time.monotonic_ns()
+        if remaining > 0:
+            stopped.wait(min(0.25, remaining / 1e9))
+            if time.monotonic() - publication.last_push >= 60:
+                publication.push()
+        elif timer_first:
+            session.advance_clock(expiry)
+            deliver()
+        else:
+            return
+
+
 def main():
+    started = time.monotonic()
     p = argparse.ArgumentParser()
     p.add_argument("--data", type=Path, required=True)
     p.add_argument("--trade-day", type=date.fromisoformat, required=True)
@@ -151,6 +172,7 @@ def main():
             message_budget=args.message_budget,
             output_budget=args.event_budget,
             market_key=args.market,
+            started=started,
         )
         pub = Publication(s, url)
         pending = deque()
@@ -203,18 +225,20 @@ def main():
                 f, i = next_row
                 r = f.records[i]
                 if i >= f.vendor_snapshot and opens <= int(r["ts_event"]) < halts:
+                    received = int(r["ts_recv"])
                     if base is None:
-                        base = time.monotonic_ns() - int(r["ts_recv"])
-                    until = base + int(r["ts_recv"])
-                    while time.monotonic_ns() < until and not stopped.is_set() and not s.due():
-                        stopped.wait(min(0.25, max(0, (until - time.monotonic_ns()) / 1e9)))
-                        if time.monotonic() - pub.last_push >= 60:
-                            pub.push()
+                        base = time.monotonic_ns() - received
+                    pace_to_record(s, received, base, stopped, pub, deliver)
+                elif base is not None and not s.engine.ended and i >= f.vendor_snapshot and int(r["ts_event"]) >= halts:
+                    pace_to_record(s, int(r["ts_recv"]), base, stopped, pub, deliver)
             if stopped.is_set() or s.due():
                 continue
             s.step(s.cursor)
         if s.state != "active":
             why = s.state
+    except PreflightDeadline as error:
+        why = str(error)
+        raise
     finally:
         # Attempt the phone, local receipt, relay and final push independently on failure.
         finished.set()
