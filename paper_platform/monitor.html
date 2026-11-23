@@ -10,7 +10,7 @@ form{display:flex;gap:.7rem;align-items:end;flex-wrap:wrap;margin:1rem 0}label{d
 .spec{white-space:pre-wrap;color:#ccdad7}summary{cursor:pointer}
 </style></head><body>
 <header><small>$venue · $asset · Paper trading</small><h1>$title</h1><p id="status" role="status">$status</p></header>
-<form method="get" $hide_filters><label>Market<select name="market">$markets</select></label><label>Strategy<select name="rule">$rules</select></label><button>Show</button></form>
+<form method="get" $hide_filters><input type="hidden" name="run" value="$run"><label>Market<select name="market">$markets</select></label><label>Strategy<select name="rule">$rules</select></label><button>Show</button></form>
 $definition
 <section id="events" data-stream="$stream" aria-label="Trading events">$cards</section>
 <script>

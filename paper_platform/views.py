@@ -47,7 +47,7 @@ def card(event, profile):
     return "<article>" + "".join(fields) + "</article>"
 
 
-def page(market, rule, state, history=(), *, live=True):
+def page(market, rule, state, history=(), *, live=True, run=""):
     profiles = markets()
     profile = profiles[market]
     rules = catalogue()
@@ -84,7 +84,7 @@ def page(market, rule, state, history=(), *, live=True):
             market=market,
             rule=rule or "",
             after=history[-1]["sequence"] if history else -1,
-            run=state.get("run", ""),
+            run=run or state.get("run", ""),
         )
     )
     return Template(Path(__file__).with_name("monitor.html").read_text(encoding="utf8")).substitute(
@@ -94,6 +94,7 @@ def page(market, rule, state, history=(), *, live=True):
         status=e(state["status"]),
         markets=options([(k, v["name"]) for k, v in profiles.items()], market),
         rules=options([("", "All strategies")] + [(k, k) for k in profile["rules"]], rule or ""),
+        run=e(run),
         hide_filters="" if live else 'style="display:none"',
         definition=definition,
         cards="".join(card(row, profile) for row in reversed(history)),
