@@ -748,7 +748,7 @@ def test_the_market_series_writers_with_stand_in_messages(tmp_path):
     series.close()
     quotes = [json.loads(x) for x in (tmp_path / "quotes.jsonl").read_text().splitlines()]
     prints = [json.loads(x) for x in (tmp_path / "prints.jsonl").read_text().splitlines()]
-    assert [q["tape_received_ns"] for q in quotes] == [10, 12, 13] and quotes[2]["bid"] is None
+    assert [q["tape_received_ns"] for q in quotes] == [10, 12, 13, 15] and quotes[2]["bid"] is None  # 15: the bid is back after 13 had none; the snapshot at 14 is not written or read
     assert [(p["tape_received_ns"], p["price"], p["size"], p["aggressor"]) for p in prints] == [(11, 41, 1, "A"), (15, 31, 5, "N")]
-    assert series.count == dict(quotes=3, prints=2)
+    assert series.count == dict(quotes=4, prints=2)
     assert not any("mid" in k for q in quotes for k in q)
