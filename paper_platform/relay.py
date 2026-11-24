@@ -4,22 +4,29 @@ import asyncio
 import base64
 import json
 import os
+from pathlib import Path
 import secrets
 import sqlite3
 
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
-from pydantic import BaseModel
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from .rulebook import catalogue
 from .market import markets
-from .views import card, page
+from .trades import trade_rows
+from .views import card, page, stop_details, trade_card
 
 
 class Packet(BaseModel):
     event: dict
     status: dict
+
+
+class JournalBatch(BaseModel):
+    packets: list[Packet] = Field(min_length=1, max_length=128)
 
 
 def relay():
@@ -37,6 +44,19 @@ def relay():
         db.executescript("""
             CREATE TABLE IF NOT EXISTS events(run TEXT, sequence INTEGER, body TEXT NOT NULL,
                 PRIMARY KEY(run,sequence));
+            CREATE INDEX IF NOT EXISTS paper_order_trade ON events(
+                run, json_extract(body,'$.trade_id'), json_extract(body,'$.action')
+            ) WHERE json_extract(body,'$.kind')='paper order';
+            CREATE INDEX IF NOT EXISTS trade_fills ON events(run, json_extract(body,'$.trade_id'), sequence)
+                WHERE json_extract(body,'$.kind')='fill';
+            CREATE INDEX IF NOT EXISTS order_lifecycle ON events(run, json_extract(body,'$.order_id'), sequence)
+                WHERE json_extract(body,'$.kind') IN ('order status','fill');
+            CREATE INDEX IF NOT EXISTS trade_interruption ON events(run, json_extract(body,'$.trade_id'), sequence)
+                WHERE json_extract(body,'$.kind')='signal'
+                  AND json_extract(body,'$.action') IN ('not scored','observation interrupted');
+            CREATE INDEX IF NOT EXISTS paper_order_rule ON events(
+                run, json_extract(body,'$.rule'), sequence
+            ) WHERE json_extract(body,'$.kind')='paper order';
             CREATE TABLE IF NOT EXISTS sessions(run TEXT PRIMARY KEY, body TEXT NOT NULL, first_ns TEXT NOT NULL);
         """)
 
@@ -46,14 +66,17 @@ def relay():
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
+    app.mount("/static", StaticFiles(directory=Path(__file__).with_name("static")), name="static")
+
     @app.get("/health")
     def health():
         return {"ready": True}
 
-    @app.post("/ingest")
-    def ingest(packet: Packet, authorization: str = Header(default="")):
+    def authorize_writer(authorization: str = Header(default="")):
         if not secrets.compare_digest(authorization.encode(), ("Bearer " + writer).encode()):
             raise HTTPException(403)
+
+    def append_packet(db, packet):
         event, status = packet.event, packet.status
         run = event.get("run")
         seq = event.get("sequence")
@@ -69,23 +92,35 @@ def relay():
         ):
             raise HTTPException(422, "invalid session or sequence")
         body = json.dumps(event, sort_keys=True, separators=(",", ":"))
+        old = db.execute("SELECT body FROM events WHERE run=? AND sequence=?", (run, seq)).fetchone()
+        if old:
+            if old[0] != body:
+                raise HTTPException(409, "sequence collision")
+            return {"next": seq + 1}
+        latest = db.execute("SELECT MAX(sequence) FROM events WHERE run=?", (run,)).fetchone()[0]
+        expected = 0 if latest is None else latest + 1
+        if expected != seq:
+            raise HTTPException(409, detail={"next": expected})
+        db.execute("INSERT INTO events VALUES(?,?,?)", (run, seq, body))
+        db.execute(
+            "INSERT INTO sessions VALUES(?,?,?) ON CONFLICT(run) DO UPDATE SET body=excluded.body",
+            (run, json.dumps(status), str(event["recorded_ns"])),
+        )
+        return {"next": seq + 1}
+
+    @app.post("/ingest", dependencies=[Depends(authorize_writer)])
+    def ingest(packet: Packet):
         with connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            old = db.execute("SELECT body FROM events WHERE run=? AND sequence=?", (run, seq)).fetchone()
-            if old:
-                if old[0] != body:
-                    raise HTTPException(409, "sequence collision")
-                return {"next": seq + 1}
-            latest = db.execute("SELECT MAX(sequence) FROM events WHERE run=?", (run,)).fetchone()[0]
-            expected = 0 if latest is None else latest + 1
-            if expected != seq:
-                raise HTTPException(409, detail={"next": expected})
-            db.execute("INSERT INTO events VALUES(?,?,?)", (run, seq, body))
-            db.execute(
-                "INSERT INTO sessions VALUES(?,?,?) ON CONFLICT(run) DO UPDATE SET body=excluded.body",
-                (run, json.dumps(status), str(event["recorded_ns"])),
-            )
-        return {"next": seq + 1}
+            return append_packet(db, packet)
+
+    @app.post("/ingest/batch", dependencies=[Depends(authorize_writer)])
+    def ingest_batch(batch: JournalBatch):
+        with connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            for packet in batch.packets:
+                result = append_packet(db, packet)
+            return result
 
     def session_state(db, run, market):
         if run:
@@ -116,6 +151,16 @@ def relay():
         all_rules = catalogue()
         return {k: all_rules[k] for k in profiles[market]["rules"]}
 
+    @app.get("/api/trades", dependencies=[Depends(viewer)])
+    def trades(rule: str, run: str | None = None, market: str = "nymex-ng"):
+        profiles = markets()
+        if market not in profiles or rule not in profiles[market]["rules"]:
+            raise HTTPException(404, "unknown market or rule")
+        with connect() as db:
+            db.execute("BEGIN")
+            state = session_state(db, run, market)
+            return trade_rows(db, state.get("run"), rule)
+
     def stream_rows(after, rule, follow, run, market, html):
         profiles = markets()
         if market not in profiles or rule and rule not in profiles[market]["rules"]:
@@ -130,18 +175,34 @@ def relay():
                     db.execute("BEGIN")
                     state = session_state(db, current, market)
                     batch = []
+                    trade_updates = {}
                     if "run" in state:
                         current = state["run"]
                         batch = db.execute(
                             "SELECT sequence,body FROM events WHERE run=? AND sequence>? ORDER BY sequence LIMIT 256",
                             (current, cursor),
                         ).fetchall()
+                        if html and rule:
+                            for seq, body in batch:
+                                event = json.loads(body)
+                                if event.get("rule") != rule or not event.get("trade_id"):
+                                    continue
+                                order = event.get("kind") in ("paper order", "fill", "order status")
+                                interrupted = event.get("action") in ("not scored", "observation interrupted")
+                                if order or interrupted:
+                                    match = trade_rows(db, current, rule, trade_id=event["trade_id"], through=seq)
+                                    if match:
+                                        trade_updates[seq] = match[0]
                 for cursor, body in batch:
                     event = json.loads(body)
                     if rule and event.get("rule") != rule:
                         continue
                     if html:
-                        data = json.dumps(dict(html=card(event, profile), status=state["status"]))
+                        payload = dict(html=card(event, profile), status=state["status"])
+                        if cursor in trade_updates:
+                            trade = trade_updates[cursor]
+                            payload.update(trade_id=trade["trade_id"], trade_html=trade_card(trade, profile))
+                        data = json.dumps(payload)
                         yield f"id: {current}/{cursor}\nevent: message\ndata: {data}\n\n"
                     else:
                         yield body + "\n"
@@ -149,7 +210,11 @@ def relay():
                     continue
                 if not follow or ("run" in state and state["status"] != "active"):
                     if html:
-                        data = json.dumps({"status": state["status"]})
+                        details = stop_details(state, rule)
+                        payload = {"status": state["status"]}
+                        if details:
+                            payload["stop_html"] = details
+                        data = json.dumps(payload)
                         yield f"event: finished\ndata: {data}\n\n"
                     return
                 await asyncio.sleep(0.1)
@@ -199,6 +264,13 @@ def relay():
                 "ORDER BY sequence DESC LIMIT 100",
                 (state.get("run"), rule, rule),
             ).fetchall()
-        return page(market, rule, state, [json.loads(r[0]) for r in reversed(recent)], run=run)
+            trades = trade_rows(db, state.get("run"), rule) if rule else []
+            runs = db.execute(
+                "SELECT run, json_extract(body,'$.trade_day'), json_extract(body,'$.status') "
+                "FROM sessions WHERE json_extract(body,'$.market')=? ORDER BY first_ns DESC LIMIT 50",
+                (market,),
+            ).fetchall()
+        return page(market, rule, state, [json.loads(r[0]) for r in reversed(recent)],
+                    run=run or state.get("run", ""), trades=trades, runs=runs)
 
     return app

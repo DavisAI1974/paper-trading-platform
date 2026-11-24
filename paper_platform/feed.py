@@ -13,6 +13,77 @@ from .market import replay_market
 from .nautilus_book import NautilusMboBook
 
 
+class MboTape:
+    """One weekly book and tape cursor, shared by archive and capture readers."""
+
+    def __init__(self, trade_day, instrument_id):
+        self.book = NautilusMboBook(instrument_id)
+        self.flags = tape.flag_bits()
+        self.position = self.event_start = self.cursor = 0
+        self.opens, self.halts = trade_day_bounds(trade_day)
+
+    def apply(self, fields, *, source_sha256, index, local_ns, snapshot=False):
+        exchange, received = fields["ts_event"], fields["ts_recv"]
+        eligible = not snapshot and self.opens <= exchange < self.halts
+        order_change = None
+        entered_levels = {}
+        if snapshot:
+            period, named = tape.VENDOR_SNAPSHOT, None
+            tick_position = group = None
+        else:
+            period, named = label(exchange)
+            tick_position, group = self.position, self.event_start
+            oid = fields["order_id"]
+            prior = self.book.orders.get(oid)
+            old = (prior.price, prior.size, prior.side.decode(), prior.entered_pos) if prior else None
+            filled = self.book.filled_in_event.get(oid, 0)
+            before = (self.book.best(BID), self.book.best(ASK))
+            notes = self.book.apply(
+                fields["action"],
+                fields["side"],
+                fields["price"],
+                fields["size"],
+                fields["order_id"],
+                fields["flags"],
+                exchange,
+                received,
+                fields["sequence"],
+                self.position,
+                carried=bool(fields["flags"] & self.flags["F_SNAPSHOT"]),
+                written=eligible,
+            )
+            after = self.book.orders.get(oid)
+            new = (after.price, after.size, after.side.decode(), after.entered_pos) if after else None
+            order_change = dict(old=old, new=new, filled_in_event=filled, notes=notes)
+            for side, was in zip((BID, ASK), before):
+                best = self.book.best(side)
+                if best is not None and best != was:
+                    entered_levels[side.decode()] = tuple(self.book.sides[side].lines[best].orders)
+            self.position += 1
+            if fields["flags"] & self.flags["F_LAST"]:
+                self.event_start = self.position
+        fields["action"] = fields["action"].decode("ascii")
+        fields["side"] = fields["side"].decode("ascii")
+        message = dict(
+            cursor=self.cursor,
+            source_sha256=source_sha256,
+            record_index=index,
+            raw=fields,
+            received_by_replay_ns=local_ns,
+            period=period,
+            trade_day=named.isoformat() if named else None,
+            in_session=eligible,
+            position_on_tape=tick_position,
+            event_start_position=group,
+            order_change=order_change,
+            entered_levels=entered_levels,
+            best_bid=self.book.best(BID),
+            best_ask=self.book.best(ASK),
+        )
+        self.cursor += 1
+        return message
+
+
 class HistoricalFeed:
     """One fresh book per session. Replay sessions seat it from the exchange's Sunday clear."""
 
@@ -44,19 +115,15 @@ class HistoricalFeed:
 
     def messages(self, *, paced=False):
         """Fresh independent iterator. Wall time affects delivery pace only, never signal eligibility."""
-        book = NautilusMboBook(self.week[0].instrument_ids[0])
-        flags = tape.flag_bits()
-        position = 0
-        cursor = 0
-        event_start = 0
-        opens, halts = trade_day_bounds(self.trade_day)
+        stream = MboTape(self.trade_day, self.week[0].instrument_ids[0])
+        opens, halts = stream.opens, stream.halts
         clock_origin = tape_origin = None
         for file in self.week:
             if file.vendor_snapshot:
-                comparison = compare_with_restatement(book, file.records[: file.vendor_snapshot])
+                comparison = compare_with_restatement(stream.book, file.records[: file.vendor_snapshot])
                 if not comparison["equal"]:
                     raise ValueError(f"{file.name}: carried book differs from opening restatement")
-                book.verify_queues(file.name)
+                stream.book.verify_queues(file.name)
             for index, record in enumerate(file.records):
                 fields = {k: record[k].item() for k in record.dtype.names}
                 exchange = fields["ts_event"]
@@ -70,60 +137,5 @@ class HistoricalFeed:
                     wait = (clock_origin + received - tape_origin - time.monotonic_ns()) / 1e9
                     if wait > 0:
                         time.sleep(wait)
-                local_ns = time.time_ns()
-                order_change = None
-                entered_levels = {}
-                if snapshot:
-                    period, named = tape.VENDOR_SNAPSHOT, None
-                    tick_position = group = None
-                else:
-                    period, named = label(exchange)
-                    tick_position, group = position, event_start
-                    oid = fields["order_id"]
-                    prior = book.orders.get(oid)
-                    old = (prior.price, prior.size, prior.side.decode(), prior.entered_pos) if prior else None
-                    filled = book.filled_in_event.get(oid, 0)
-                    before = (book.best(BID), book.best(ASK))
-                    notes = book.apply(
-                        fields["action"],
-                        fields["side"],
-                        fields["price"],
-                        fields["size"],
-                        fields["order_id"],
-                        fields["flags"],
-                        exchange,
-                        received,
-                        fields["sequence"],
-                        position,
-                        carried=bool(fields["flags"] & flags["F_SNAPSHOT"]),
-                        written=eligible,
-                    )
-                    after = book.orders.get(oid)
-                    new = (after.price, after.size, after.side.decode(), after.entered_pos) if after else None
-                    order_change = dict(old=old, new=new, filled_in_event=filled, notes=notes)
-                    for side, was in zip((BID, ASK), before):
-                        best = book.best(side)
-                        if best is not None and best != was:
-                            entered_levels[side.decode()] = tuple(book.sides[side].lines[best].orders)
-                    position += 1
-                    if fields["flags"] & flags["F_LAST"]:
-                        event_start = position
-                fields["action"] = fields["action"].decode("ascii")
-                fields["side"] = fields["side"].decode("ascii")
-                yield dict(
-                    cursor=cursor,
-                    source_sha256=file.sha256,
-                    record_index=index,
-                    raw=fields,
-                    received_by_replay_ns=local_ns,
-                    period=period,
-                    trade_day=named.isoformat() if named else None,
-                    in_session=eligible,
-                    position_on_tape=tick_position,
-                    event_start_position=group,
-                    order_change=order_change,
-                    entered_levels=entered_levels,
-                    best_bid=book.best(BID),
-                    best_ask=book.best(ASK),
-                )
-                cursor += 1
+                yield stream.apply(fields, source_sha256=file.sha256, index=index,
+                                   local_ns=time.time_ns(), snapshot=snapshot)

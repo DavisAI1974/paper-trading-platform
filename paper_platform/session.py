@@ -33,9 +33,10 @@ def digest(path):
 class Session:
     def __init__(
         self, data_root, trade_day, *, message_budget, output_budget, market_key="nymex-ng", on_event=None,
-        started=None,
+        started=None, execution_plan=None, captured=None, plan_source=None, capture_connection=None,
     ):
         self.started = time.monotonic() if started is None else started
+        self.trade_day = trade_day.isoformat()
         self.market = replay_market(market_key)
         self.data_root = Path(data_root).resolve()
         origin = git(self.data_root, "remote", "get-url", "origin").lower().removesuffix(".git")
@@ -55,6 +56,10 @@ class Session:
             raise ValueError("the running rules and calculation code must be committed")
         catalogue_rules = catalogue()
         self.rules = {key: catalogue_rules[key] for key in self.market["rules"]}
+        self.execution = None
+        if execution_plan is not None:
+            from .paper_execution import PaperExecution
+            self.execution = PaperExecution(execution_plan, self.rules, self.write)
         self.rule_commits = {key: self.revision for key in self.rules}
         self.state = "active"
         self.cursor = -1
@@ -64,9 +69,26 @@ class Session:
         self.output_budget = output_budget
         self.engine = Engine(trade_day, self.run, self.rules)
         folder = self.data_root / self.market["archive"]
-        self.feed = HistoricalFeed(folder, trade_day, market_key)
-        causal_check = check_prefix(self.feed, self.rules, self.started + LIMIT_SECONDS)
-        self.stream = self.feed.messages()
+        self.capture_end = None
+        self.liquidation_available = True
+        self.captured = captured is not None
+        if self.captured:
+            from .capture import CapturedFeed, capture_preflight
+            path = Path(captured).resolve()
+            relative = path.relative_to(self.data_root / "paper-trading" / "captures")
+            self.feed = CapturedFeed(path, trade_day, capture_connection)
+            causal_check = capture_preflight(self.feed, self.rules, self.started + LIMIT_SECONDS)
+            self.stream = self.feed.messages(follow=True, poll=True)
+            import sqlite3
+            from contextlib import closing
+            with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as db:
+                self.warm_through = db.execute("SELECT COALESCE(MAX(position),-1) FROM frames").fetchone()[0]
+            sources = [dict(capture=relative.as_posix(), connection_id=self.feed.connection_id, reference="frame SHA-256 and tape position")]
+        else:
+            self.feed = HistoricalFeed(folder, trade_day, market_key)
+            causal_check = check_prefix(self.feed, self.rules, self.started + LIMIT_SECONDS)
+            self.stream = self.feed.messages()
+            sources = self.feed.sources
         self.folder = self.data_root / "paper-trading" / self.run
         self.folder.mkdir(parents=True, exist_ok=False)
         self.journal = (self.folder / "events.jsonl").open("x", encoding="utf8", newline="\n")
@@ -77,8 +99,11 @@ class Session:
             trade_day=trade_day.isoformat(),
             code_commit=self.revision,
             order_book={"engine": "NautilusTrader", "version": version("nautilus_trader"), "type": "L3_MBO"},
-            inputs=self.feed.sources,
-            manifest_sha256=digest(folder / "MANIFEST.json"),
+            inputs=sources,
+            execution_plan=execution_plan,
+            execution_plan_source=plan_source,
+            execution_plan_sha256=hashlib.sha256(json.dumps(execution_plan, sort_keys=True, separators=(",", ":")).encode()).hexdigest() if execution_plan is not None else None,
+            manifest_sha256=None if self.captured else digest(folder / "MANIFEST.json"),
             data_commit=git(self.data_root, "rev-parse", "HEAD"),
             rule_commits=self.rule_commits,
             rule_files={k: digest(RULES / (k + ".json")) for k in self.rules},
@@ -115,15 +140,20 @@ class Session:
 
     def record(self, e):
         signal = self.write("signal", **e)
-        if e["action"] in ("open", "close", "exit"):
-            self.write(
-                "paper order",
-                **e,
-                order_id=f"{self.run}-{signal['sequence']}",
-                signal_sequence=signal["sequence"],
-                pricing="open",
-                fill_price=None,
-            )
+        if not self.liquidation_available or e["action"] not in ("open", "close", "exit"):
+            return
+        sequence = signal["sequence"]
+        order_id = f"{self.run}-{sequence}"
+        if self.execution is None:
+            self.write("paper order", **e, order_id=order_id, signal_sequence=sequence,
+                       pricing="open", fill_price=None)
+            return
+        for instruction in self.execution.instructions(dict(e, signal_sequence=sequence)):
+            if self.state == "active" and (self.events >= self.output_budget
+                                           or time.monotonic() - self.started >= LIMIT_SECONDS):
+                break
+            tag = order_id if instruction["rule"] == e["rule"] else f"{order_id}-{instruction['rule']}"
+            self.execution.submit(instruction, tag)
 
     def due(self):
         if time.monotonic() - self.started >= LIMIT_SECONDS:
@@ -145,6 +175,9 @@ class Session:
             self.stop("budget reached")
             return False
         for decision in decisions:
+            if self.execution and self.events >= self.output_budget:
+                self.stop("budget reached")
+                return False
             self.record(decision)
         reason = self.due()
         if reason:
@@ -179,7 +212,12 @@ class Session:
             try:
                 message = next(self.stream, None)
                 if message is None:
-                    self.stop("end of purchased input")
+                    self.stop("end of capture" if self.captured else "end of purchased input")
+                    return None
+                if "capture_end" in message:
+                    self.stop_capture(message["capture_end"])
+                    return None
+                if message.get("idle"):
                     return None
                 if message["period"] != "vendor snapshot":
                     received = message["raw"]["ts_recv"]
@@ -189,11 +227,53 @@ class Session:
                             return None
                 self.cursor = message["cursor"]
                 self.last = message
-                self.receives.write(struct.pack("<Q", message["received_by_replay_ns"]))
+                if self.execution:
+                    self.execution.market(message)
+                self.receives.write(struct.pack("<Q", message["received_by_capture_ns" if self.captured else "received_by_replay_ns"]))
+                if self.execution and self.events >= self.output_budget:
+                    self.stop("budget reached")
+                    return None
+                if self.captured and "live_eligible" in message and (
+                    not message["live_eligible"] or self.cursor <= self.warm_through
+                ):
+                    # Warm the rule inputs but carry no historical position across the manual start.
+                    self.engine.tick(message)
+                    self.engine.open.clear()
+                    self.engine.unmonitored.clear()
+                    self.engine.managers.clear()
+                    self.engine.responses.pending.clear()
+                    return message
                 return message if self._apply(self.engine.tick, message) else None
             except Exception:
                 self.stop("failure")
                 raise
+
+    def stop_capture(self, evidence):
+        with self.lock:
+            if self.state != "active":
+                return False
+            self.capture_end = evidence
+            self.liquidation_available = evidence["status"] in (
+                "closed", "end of purchased input", "message budget reached", "clock limit", "capture stopped"
+            )
+            reason = ("flattened at the 5.75-hour stop" if evidence["status"] == "clock limit"
+                      else "capture: " + evidence["status"])
+            return self.stop(reason)
+
+    def stop_notice(self):
+        if not self.capture_end:
+            return self.state
+        last = self.capture_end.get("last_mbo_position")
+        recorded = "unknown" if last is None else str(last)
+        processed = "none" if self.cursor < 0 else str(self.cursor)
+        return f"{self.state}. Last recorded MBO {recorded}. Last processed {processed}."
+
+    def last_source(self):
+        if self.last is None:
+            return None
+        return dict(cursor=self.cursor, reference=[self.last["source_sha256"], self.last["record_index"]],
+                    tape_received_ns=self.last["raw"]["ts_recv"],
+                    host_received_ns=self.last.get("received_by_capture_ns", self.last.get("received_by_replay_ns")))
 
     def stop(self, reason):
         with self.lock:
@@ -203,15 +283,28 @@ class Session:
             try:
                 for e in self.engine.stop(reason):
                     self.record(e)
-                self.write("status", reason=reason, trade_data=False)
+                if self.execution and self.last:
+                    self.execution.flatten(self.last, reason, self.run, executable=self.liquidation_available)
+                self.write("status", reason=reason, trade_data=False, last_source=self.last_source(),
+                           capture_end=self.capture_end, remaining_paper_inventory=self._paper_inventory())
             finally:
                 self.receives.close()
                 self.journal.close()
                 files = {p.name: digest(p) for p in self.folder.iterdir() if p.is_file()}
                 receipt = dict(
-                    **self.initial, status=reason, delivered=self.cursor + 1, events=self.events, files=files
+                    **self.initial, status=reason, delivered=self.cursor + 1, events=self.events, files=files,
+                    remaining_paper_inventory=self._paper_inventory(), last_source=self.last_source(),
+                    capture_end=self.capture_end,
                 )
                 (self.folder / "receipt.json").write_text(json.dumps(receipt, indent=2), encoding="utf8")
+
+            return True
+
+    def _paper_inventory(self):
+        if self.execution is None:
+            return {}
+        return {rule: {key: qty for key, qty in venue.inventory.items() if qty}
+                for rule, venue in self.execution.venues.items() if any(venue.inventory.values())}
 
     def status(self):
         with self.lock:
@@ -219,8 +312,11 @@ class Session:
                 run=self.run,
                 market=self.market["id"],
                 status=self.state,
+                trade_day=self.trade_day,
                 cursor=self.cursor,
+                capture_end=self.capture_end,
                 events=self.events,
                 open_positions=self.engine.position_count,
+                paper_inventory=self._paper_inventory(),
                 code_commit=self.revision,
             )

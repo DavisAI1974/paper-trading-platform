@@ -4,3 +4,4 @@ databento-dbn==0.62.0
 numpy==2.3.5
 requests>=2.32.4,<3
 nautilus_trader==1.231.0
+cryptography>=43,<50

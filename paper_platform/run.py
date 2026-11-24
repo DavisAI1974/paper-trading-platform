@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import sqlite3
 import subprocess
 import threading
 import time
@@ -20,13 +21,13 @@ from .session import Session, git
 from root.calendar import trade_day_bounds
 
 
-def notify(reason, run):
+def notify(reason, run, *, activity="paper run"):
     response = requests.post(
         "https://api.pushover.net/1/messages.json",
         data={
             "token": os.environ["PUSHOVER_APP_TOKEN"],
             "user": os.environ["PUSHOVER_USER_KEY"],
-            "message": f"NG paper run {run}: {reason}",
+            "message": f"NG {activity} {run}: {reason}",
         },
         timeout=5,
     )
@@ -127,7 +128,14 @@ class Publication:
         status["status"] = (
             event["reason"] if event["kind"] == "status" and event["reason"] != "started" else "active"
         )
-        return {"event": wire(event), "status": status}
+        if status["status"] == "active":
+            status.pop("capture_end", None)
+        else:
+            status["capture_end"] = event.get("capture_end")
+            status["last_source"] = event.get("last_source")
+            if "remaining_paper_inventory" in event:
+                status["paper_inventory"] = event["remaining_paper_inventory"]
+        return {"event": wire(event), "status": wire(status)}
 
     def post_again(self, event):
         response = self.http.post(
@@ -156,6 +164,23 @@ def pace_to_record(session, received, base, stopped, publication, deliver):
             return
 
 
+def read_execution_plan(args):
+    if args.execution_plan:
+        return json.loads(args.execution_plan.read_text(encoding="utf-8")), args.execution_plan.name
+    selector = args.agent_plan
+    if selector is None:
+        return None, None
+    if selector.lstrip().startswith("{"):
+        return json.loads(selector), "workflow input"
+    root = Path(__file__).resolve().parent / "execution_plans"
+    if Path(selector).name != selector or not selector.endswith(".json"):
+        raise ValueError("supply an agent plan filename ending in .json or a JSON object")
+    path = (root / selector).resolve()
+    if path.parent != root:
+        raise ValueError("named plans belong in paper_platform/execution_plans")
+    return json.loads(path.read_text(encoding="utf-8")), f"paper_platform/execution_plans/{selector}"
+
+
 def main():
     started = time.monotonic()
     p = argparse.ArgumentParser()
@@ -164,6 +189,11 @@ def main():
     p.add_argument("--market", default="nymex-ng")
     p.add_argument("--message-budget", type=int, required=True)
     p.add_argument("--event-budget", type=int, required=True)
+    p.add_argument("--capture", type=Path)
+    p.add_argument("--capture-connection", type=int)
+    plans = p.add_mutually_exclusive_group()
+    plans.add_argument("--execution-plan", type=Path)
+    plans.add_argument("--agent-plan")
     p.add_argument("--greg-go", action="store_true")
     args = p.parse_args()
     if not args.greg_go:
@@ -184,13 +214,15 @@ def main():
     why = "failure"
     try:
         requests.get(url + "/health", timeout=90).raise_for_status()
+        execution_plan, plan_source = read_execution_plan(args)
         s = Session(
             args.data,
             args.trade_day,
             message_budget=args.message_budget,
             output_budget=args.event_budget,
             market_key=args.market,
-            started=started,
+            started=started, captured=args.capture, capture_connection=args.capture_connection,
+            execution_plan=execution_plan, plan_source=plan_source,
         )
         pub = Publication(s, url, push_url)
         pending = deque()
@@ -202,29 +234,42 @@ def main():
             signal.signal(sig, lambda *_: stopped.set())
         opens, halts = trade_day_bounds(args.trade_day)
         base = None
-        indices = ((f, i) for f in s.feed.week for i in range(len(f.records)))
+        indices = () if s.captured else ((f, i) for f in s.feed.week for i in range(len(f.records)))
 
         def guard():
-            while not finished.wait(0.1):
-                reason = s.due()
-                if reason:
-                    s.stop(reason)
-                    try:
-                        notify(reason, s.run)
-                        alert_sent.set()
-                    except requests.RequestException:
-                        pass
+            while not finished.wait(0.25):
+                if s.state != "active":
                     return
+                end = None
+                if s.captured and args.capture_connection is not None:
+                    try:
+                        end = s.feed.terminal_state()
+                    except (OSError, sqlite3.Error, RuntimeError):
+                        end = dict(connection_id=args.capture_connection, status="capture journal unreadable")
+                if end is not None:
+                    stopped_here = s.stop_capture(end)
+                elif reason := s.due():
+                    stopped_here = s.stop(reason)
+                else:
+                    continue
+                if stopped_here:
+                    try:
+                        notify(s.stop_notice(), s.run)
+                        alert_sent.set()
+                    except (requests.RequestException, RuntimeError):
+                        pass
+                return
 
         watcher = threading.Thread(target=guard, daemon=True)
         watcher.start()
 
         def deliver():
             while pending:
-                event = pending.popleft()
+                event = pending[0]
                 pub.send(event)
-                if event["kind"] == "paper order":
+                if event["kind"] in ("paper order", "fill"):
                     pub.push()
+                pending.popleft()
             if time.monotonic() - pub.last_push >= 60:
                 pub.push()
 
@@ -236,6 +281,10 @@ def main():
                 why = s.due()
                 break
             deliver()
+            if s.captured:
+                if s.step(s.cursor) is None and s.state == "active":
+                    stopped.wait(0.1)
+                continue
             # Peek at the next raw receive time without exposing it to any strategy.
             # The scheduler paces delivery; only step() admits that record into the engine.
             next_row = next(indices, None)
@@ -257,6 +306,13 @@ def main():
     except PreflightDeadline as error:
         why = str(error)
         raise
+    except Exception as error:
+        if args.capture:
+            from .capture import CaptureEnded
+            if isinstance(error, CaptureEnded):
+                evidence = error.evidence
+                why = f"{error} (connection {evidence['connection_id']}, last MBO {evidence['last_mbo_position']})"
+        raise
     finally:
         # Attempt the phone, local receipt, relay and final push independently on failure.
         finished.set()
@@ -270,7 +326,7 @@ def main():
                 errors.append("close")
         try:
             if not alert_sent.is_set():
-                notify(why, s.run if s else "preflight")
+                notify(s.stop_notice() if s is not None else why, s.run if s else "preflight")
         except Exception:
             errors.append("phone")
         if pub is not None:
