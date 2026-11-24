@@ -53,3 +53,10 @@ Capture recovery uses a dedicated markets-data branch per source and week. Set `
 ## Recovering the phone view
 
 The [dashboard restore workflow](../.github/workflows/restore_phone_dashboard.yml) accepts the ID of a completed run. It reads the journal and receipt on that run's markets-data branch and sends the original sequenced events to Render in transactional batches. Duplicate deliveries preserve the original event. A sequence collision rolls back the batch. The last event restores the recorded stop reason. The restore command only uses the relay ingest API.
+
+
+## Feed interruptions during a live paper run
+
+The live workflow binds the paper runner to the connection opened by its own recorder. A Databento error, disconnect, heartbeat timeout or checkpoint publisher failure stops that session. A writer that exits abruptly can leave its end time unknown. The reader detects the released writer lock and reports the abrupt exit.
+
+For a feed failure the runner cancels resting paper orders, retains any filled contracts still held, and records that liquidation was unavailable. Normal budget and clock stops retain their administrative liquidation path. The terminal journal event and receipt distinguish the recorder’s last durable MBO position from the runner’s last processed input. The Render dashboard shows both when available, including when viewing a single strategy or restoring a completed journal. Pushover stop notices carry the two positions when the runner receives the recorder’s terminal record.
