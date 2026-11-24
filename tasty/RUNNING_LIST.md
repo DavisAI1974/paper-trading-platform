@@ -111,14 +111,43 @@ line here is a result.
     cancelled orders. The start check and the flatten now count only an order that is not terminal and not fully
     filled. Fixed before the first run (`ef58c85`).
 
+14. 2026-11-24, Claude, after the first run with orders. THE ACCOUNT IS STUCK SHORT 13 LOTS OF /NGF7. The run's own
+    flatten (buy 13) was refused at the dry run with the same 422. A close-out by hand (`tasty/paper/close_out.py`)
+    then asked the sandbox to cancel its six unfinished sell orders: five of the run's sells whose status stayed
+    "Live" after they filled, and order 2207911 of 2026-11-23, which has read "Cancel Requested" since then. The
+    five cancels were accepted and those orders now read "Cancel Requested" too; the buy was refused again, and so
+    was a dry run of "Buy to Close". Most likely cause: the sandbox refuses a buy while any sell order on the symbol
+    is not finished, and 2207911 was already standing before the run began, so every buy of the run was refused
+    from the first. They are Day orders. Ways out: try the buy again after the trade day ends (5 pm Eastern
+    Tuesday), or reset the sandbox account on tastytrade's tool page (Greg).
+    Record: DATA `paper-trading-20261123/live-runs/closeout-20261124T011337Z/`.
+15. 2026-11-24, Claude, same run. NO TRADE WAS EVER CLOSED BY AN ORDER. Every close was either a buy (refused) or the
+    sell that closes a buy which had never opened. 28 closes were held back for that second reason.
+16. 2026-11-24, Claude, same run. ORDERS GO OUT LATE. From the signal to the order going out: 1 to 61 seconds over
+    the 19 submits, growing as the queue filled (the last two waited 59 and 61 seconds). One at a time, each with a
+    fresh sign-in, a dry run and reads that the sandbox often answers with a server error.
+17. 2026-11-24, Claude, same run. THE ORDER BUDGET ENDED THE RUN AFTER SEVEN MINUTES, so the feed was not recorded
+    past the fills and the fill prices could not be set beside the market from the run's own record. A feed-only
+    recording was started nine minutes later to catch it. The budget stop should stop the ORDERS and let the feed
+    and the ledger run on to the end of the time asked for.
+18. 2026-11-24, Claude, same run. 6 of the 19 submits were answered with a server error (HTTP 500). None was re-sent
+    and none was found afterwards, so those six trades never opened, and each still used one of the 20 orders.
+
 ## D. Runs
 
-1. 2026-11-23 evening (trade day Tue Nov 24, 2026), started 8:05 pm Eastern. THE FIRST RUN WITH ORDERS, on Greg's
+1. 2026-11-23 evening (trade day Tue Nov 24, 2026), 8:05 pm to 8:12 pm Eastern. THE FIRST RUN WITH ORDERS, on Greg's
    go ("Just do run 2 with trades"): the live sandbox feed, all 32 strategies, 1 lot a trade, at most 20 orders,
-   account 5WY79188, code `ef58c85`. STILL RUNNING when this line was written. After four minutes: 11 submits, all
-   sells; 6 filled, 5 answered with a server error and not found afterwards; 45 intended orders not sent (26 buys
-   refused by the sandbox, the rest stopped at a failed dry run). What it showed so far is C8 to C11 above.
-   Record: DATA `paper-trading-20261123/live-runs/orders-20261124T010517Z/`. Not scored.
+   account 5WY79188, code `ef58c85`. Not scored.
+   - It stopped itself at the order budget after 7 minutes (19 submits, the 20th kept for the flatten).
+   - 62 paper trades on the ledger from 13 strategies (CL14 17, CL06 12, CL15 7, CL13 5, CX07 4, CL05 3, CL07 3,
+     CX01 3, CL10 2, CL11 2, CX03 2, CX08 1, CX15 1). 120 intended orders.
+   - 19 submitted, ALL SELLS. 13 filled (3.545 to 3.548). 6 answered with a server error and never became orders.
+   - 101 not sent: 43 buys refused by the sandbox at the dry run; 34 closes held back because their open had not
+     filled; 23 cut off by the budget stop; 1, the flatten itself, refused.
+   - The account was left SHORT 13 LOTS. The close-out by hand did not get through either (C14).
+   - What it showed: C8 to C11 and C14 to C18.
+   Records: DATA `paper-trading-20261123/live-runs/orders-20261124T010517Z/` (the run) and
+   `closeout-20261124T011337Z/` (the close-out and two dry-run probes).
 
 (Each live run is added here when it has been made: the date, how long, how many orders, where its record is, and
 the gaps and misses it showed. Each of those also gets its own line in section A, B or C.)
