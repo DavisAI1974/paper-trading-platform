@@ -42,6 +42,9 @@ def relay():
         return sqlite3.connect(dbfile, timeout=10)
 
     with connect() as db:
+        # Write-ahead logging: a page reading for a phone does not hold up the runner's writes. In the
+        # second run test one write waited longer than the runner's 8 seconds and the run ended on it.
+        db.execute("PRAGMA journal_mode=WAL")
         db.executescript("""
             CREATE TABLE IF NOT EXISTS events(run TEXT, sequence INTEGER, body TEXT NOT NULL,
                 PRIMARY KEY(run,sequence));

@@ -358,8 +358,29 @@ def main():
         watcher = threading.Thread(target=guard, daemon=True)
         watcher.start()
 
+        page_done = threading.Event()
+
+        def feed_page():
+            # The phone page is a view; markets-data is the record. With --keep-tape-pace a slow or failed
+            # post to the page is tried again here and never stops the run. The second run test ended at
+            # 2 minutes 46 seconds of tape on one post that took longer than its 8 seconds.
+            while not page_done.is_set():
+                try:
+                    pub.deliver_pending(pending)
+                except Exception as error:
+                    print("phone page post failed, trying again: " + type(error).__name__, flush=True)
+                    page_done.wait(2)
+                else:
+                    page_done.wait(0.05)
+
+        page_feeder = None
+        if args.keep_tape_pace and url:
+            page_feeder = threading.Thread(target=feed_page, daemon=True, name="phone-page")
+            page_feeder.start()
+
         def deliver():
-            pub.deliver_pending(pending)
+            if page_feeder is None:
+                pub.deliver_pending(pending)
             if not args.keep_tape_pace:
                 journal.wait_for_orders()
 
@@ -429,9 +450,25 @@ def main():
                 notify(s.stop_notice() if s is not None else why, s.run if s else "preflight", activity=activity)
         except Exception:
             errors.append("phone")
+        if "page_done" in locals():
+            # One sender at a time: the background sender ends before the last rows are sent.
+            page_done.set()
+            if page_feeder is not None:
+                page_feeder.join()
+
+        def deliver_last_rows():
+            # The rows of the stop reach the page here. With --keep-tape-pace a failed post is tried again.
+            for attempt in range(6):
+                try:
+                    return pub.deliver_pending(pending, final=True)
+                except Exception:
+                    if not args.keep_tape_pace or attempt == 5:
+                        raise
+                    time.sleep(2 ** attempt)
+
         if journal is not None:
             with ThreadPoolExecutor(max_workers=1, thread_name_prefix="render-journal") as relay:
-                delivery = relay.submit(pub.deliver_pending, pending, final=True)
+                delivery = relay.submit(deliver_last_rows)
                 try:
                     journal.finish()
                 except Exception:
