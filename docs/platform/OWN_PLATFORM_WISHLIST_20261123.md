@@ -1,8 +1,10 @@
 # The 35-item paper platform checklist
 
-**16 of 35 checked off.** A checked box means the requirement is supplied by NautilusTrader or implemented on main. An open box names the remaining work. The original DECIDED, OPEN and SUGGESTED labels record the November 23 wishlist. The status beneath each item records subsequent decisions and progress. [NautilusTrader comparison](NAUTILUSTRADER_COVERAGE.md) · [Draft PR 5](https://github.com/DavisAI1974/paper-trading-platform/pull/5) · [Archived original](https://github.com/DavisAI1974/markets-data/blob/111e46bc156ecf05bfa25814cea3b9c7040a5fc9/tasks/family-research-20261022/research-union-current/paper-trading-20261123/OWN_PLATFORM_WISHLIST_20261123.md)
+**15 of 35 checked off.** A checked box means the requirement is supplied by NautilusTrader or implemented on main. An open box names the remaining work. The original DECIDED, OPEN and SUGGESTED labels record the November 23 wishlist. The status beneath each item records subsequent decisions and progress. [NautilusTrader comparison](NAUTILUSTRADER_COVERAGE.md) · [Draft PR 5](https://github.com/DavisAI1974/paper-trading-platform/pull/5) · [Archived original](https://github.com/DavisAI1974/markets-data/blob/111e46bc156ecf05bfa25814cea3b9c7040a5fc9/tasks/family-research-20261022/research-union-current/paper-trading-20261123/OWN_PLATFORM_WISHLIST_20261123.md)
 
 [Ccode handoff for items 17, 2, 23, 26 and 35](HANDOFF.md) · [Draft implementation branch](https://github.com/DavisAI1974/paper-trading-platform/tree/codex/strategy-trades-and-mbo-capture)
+
+**Status review.** Compared [main at c79b7ea](https://github.com/DavisAI1974/paper-trading-platform/tree/c79b7ea5c56764ade62ebf11e9ce64f1e93db3a7) with [draft code at 95400eb](https://github.com/DavisAI1974/paper-trading-platform/tree/95400eba118442ebf0012dc1c1d39ae5a6c917e5). Of the 33 items reviewed, 15 are checked and 18 are open. Reviewed open items are **1, 2, 6, 7, 9, 12, 16, 17, 18, 20, 24, 25, 27, 28, 30, 31, 32 and 35**. Items **23 and 26** were excluded from this review and retain their existing open boxes. This was a source and repository-history review. No workflow or paper session was started.
 
 ## WHAT IT IS
 
@@ -12,7 +14,7 @@
 
 - [ ] **2.** All 32 strategies run (Claude's CL01 to CL17, Codex's CX01 to CX15), each on its own, never mixed. DECIDED
 
-  **In progress.** All 30 rule files are available. End-to-end operation depends on Frankie’s and the agents’ execution choices. Six manager rules reference a parent entry.
+  **In progress.** The draft catalogue and execution plan cover CL01–CL17 and CX01–CX15. The two family agents have supplied placement and size for every rule. Ccode’s wiring review and an end-to-end demonstration of separate orders, fills and inventory are outstanding.
 
   **The current NGX3 plan accounts for all 32. Ccode owns the remaining wiring review.** Read from the [NGX3 plan](../../paper_platform/execution_plans/ngx3-12be6ea6e40347def5f574b1c2f36093bba99200.json): all 32 rule IDs are in it, each with one contract, no tick offset and a crossing close. Opening orders: `cross` for CL05, CL07, CL10, CL11, CL13, CL15, CL16, CX05, CX06, CX11, CX12, CX13, CX14; `cross_limit` for CL01, CL03, CL04, CL06, CL08, CL14, CL17, CX02, CX03, CX04, CX07, CX08, CX15; `post` for CL02, CL09, CL12, CX01, CX09, CX10. Each of the six managers lists 22 parent entry rules, all 17 CL rules and the five CX entry rules that can open on its side, and exits when its parent closes. The side words agree: CL and CX15 signals carry `buy` or `sell`, which is what a manager's direction is matched against. Still to do: read the matcher path for each selected rule and manager against this plan and finish whatever wiring it lacks. Nothing was run.
 
@@ -32,11 +34,11 @@
 
 - [ ] **6.** The exact order book kept for the whole week, seated at the exchange's Sunday start-up, carried straight through. Never restarted at midnight UTC. DECIDED
 
-  **In progress.** Main seats the book on Sunday and checks the next UTC restatement. A full uninterrupted live week is outstanding.
+  **In progress.** Main seats the book on Sunday and checks the next UTC restatement. The existing purchased-data evidence covers four trade days. A record of one uninterrupted live week, including its UTC midnight boundaries, is outstanding.
 
 - [ ] **7.** Everything the feed sends is recorded whole, as it arrives, with our receive time in nanoseconds. Raw, nothing dropped. DECIDED
 
-  **In progress.** PR 5 records DBN deliveries and host receive times and adds recovery checkpoints. A replacement runner can restore encrypted checkpoints from markets-data. The recorder persists the connection ID, last durable frame position and termination reason. The final publisher also retries a locally committed checkpoint after a failed push, even when the capture has not changed. A hard loss between checkpoints can lose original receive timestamps.
+  **In progress.** PR 5 records DBN deliveries and host receive times and adds recovery checkpoints. A replacement runner can restore encrypted checkpoints from markets-data. The recorder persists the connection ID, last durable frame position and termination reason. The final publisher also retries a locally committed checkpoint after a failed push, even when the capture has not changed. If the capture host is lost after a local write and before its checkpoint reaches markets-data, exact receive timestamps for that interval can be lost. Lossless recovery remains open. [Recorder](../../paper_platform/record_mbo.py) · [Checkpoint publisher](../../paper_platform/capture_backup.py)
 
 - [x] **8.** Real data only. No made-up numbers, not even to test code. DECIDED
 
@@ -54,7 +56,7 @@
 
 - [x] **11.** Every rule sees only what is known at that tick. Check built in: the trades opened on a tape cut at a tick equal the trades opened on the whole tape up to that tick. DECIDED
 
-  **Our build.** The physical cutoff gate compares ordered decisions on four purchased trade days. The existing evidence applies to main. [Cutoff gate](../../paper_platform/causal_gate.py)
+  **Our build.** The physical cutoff gate compares ordered decisions on four purchased trade days. The existing evidence applies to main. The cutoff gate has not been run on the 32-strategy draft, including CL16 and CL17. [Cutoff gate](../../paper_platform/causal_gate.py)
 
 - [ ] **12.** Replay mode: the same platform runs a stored trade day's tape, tick by tick, with the same code as live. SUGGESTED
 
@@ -84,11 +86,11 @@
 
   **Earlier Ccode handoff, November 24.** The contract definition and the Databento instrument ID (150611, NGX3) for the purchased archive are recorded with their sources. [Contract record](../../paper_platform/execution_plans/NG_OCT2023_CONTRACT.md) Two decider agents, one for each rule family, were briefed to choose placement and size from each rule's own words, with "no decision" allowed. Both were stopped at the session change before they recorded a choice in that pass. The [item 17 handoff on Ccode's markets-data branch](https://github.com/DavisAI1974/markets-data/blob/ccr-349e2ffe-07p8od/tasks/family-research-20261022/research-union-current/paper-trading-20261123/item17-20261124/README.md) now includes the family briefs, both authors' rule text and open questions, the plan format and the NGX3 contract record. Each family brief names its answer file.
 
-  **Codex took over #17 and both family decision agents.** The [versioned NGX3 plan](../../paper_platform/execution_plans/ngx3-12be6ea6e40347def5f574b1c2f36093bba99200.json) contains decisions for all 32 strategies, including parent entry IDs and parent-close behavior for CX05, CX06, CX11, CX12, CX13 and CX14. The [CL decisions](https://github.com/DavisAI1974/markets-data/blob/12be6ea6e40347def5f574b1c2f36093bba99200/tasks/family-research-20261022/research-union-current/paper-trading-20261123/item17-20261124/CL-answer.json) and [CX decisions](https://github.com/DavisAI1974/markets-data/blob/12be6ea6e40347def5f574b1c2f36093bba99200/tasks/family-research-20261022/research-union-current/paper-trading-20261123/item17-20261124/CX-answer.json) record the agents' reasons by rule ID. Both agents chose one contract per opening order and crossing exits. CL16 crosses in the direction of the quote step. CL17 uses a zero-offset crossing limit at the touched quote. Both act at the unsided print. Frankie's separate input remains pending for all 32. His launch and the first paper session still await Greg's go. The draft has no execution evidence.
+  **Codex took over #17 and both family decision agents.** The [versioned NGX3 plan](../../paper_platform/execution_plans/ngx3-12be6ea6e40347def5f574b1c2f36093bba99200.json) contains decisions for all 32 strategies, including parent entry IDs and parent-close behavior for CX05, CX06, CX11, CX12, CX13 and CX14. The [CL decisions](https://github.com/DavisAI1974/markets-data/blob/12be6ea6e40347def5f574b1c2f36093bba99200/tasks/family-research-20261022/research-union-current/paper-trading-20261123/item17-20261124/CL-answer.json) and [CX decisions](https://github.com/DavisAI1974/markets-data/blob/12be6ea6e40347def5f574b1c2f36093bba99200/tasks/family-research-20261022/research-union-current/paper-trading-20261123/item17-20261124/CX-answer.json) record the agents' reasons by rule ID. Both agents chose one contract per opening order and crossing exits. CL16 crosses in the direction of the quote step. CL17 uses a zero-offset crossing limit at the touched quote. Both act at the unsided print. The runner has all required decisions. A separate Frankie sign-off is unnecessary. The matching changes are in draft and actual fill evidence from a paper session awaits Greg’s go.
 
-- [x] **18.** If the feed lacks what a rule needs, that rule's trades are marked "not scored: the feed lacks &lt;what&gt;" and stay out of all scoring. DECIDED
+- [ ] **18.** If the feed lacks what a rule needs, that rule's trades are marked "not scored: the feed lacks &lt;what&gt;" and stay out of all scoring. DECIDED
 
-  **Our build.** Missing inputs produce a reason on the affected observation. [Decision engine](../../paper_platform/engine.py)
+  **Reopened for the 32-strategy catalogue.** The CX path journals the missing fields when it cannot assess an open trade. CL16 and CL17 also need quotes to monitor their exits. On a print missing its bid or offer, their handler clears the current quote facts and returns. An already-open trade gets neither an exit assessment nor a journal event identifying the missing input. That trade needs a “not scored” record with its ID, source print and missing field. An unknown aggressor is a valid input for these two rules. [Unsided-print rules](../../paper_platform/unsided_print_rules.py) · [Decision engine](../../paper_platform/engine.py)
 
 ## THE RUN
 
@@ -142,7 +144,7 @@
 
 - [ ] **28.** Append-only: every signal, order, fill and status change, each with its time in nanoseconds, the rule version (git commit) that made it, and the feed messages it was made from. DECIDED
 
-  **In progress.** Signals and orders have source references and rule revisions. PR 5 adds native fill events with source, order, rule revision and finding. The session resolves the last Git commit that changed each rule file separately from the platform commit. Review is pending.
+  **In progress.** Signals and orders have source references and rule revisions. PR 5 adds native fill events with source, order, rule revision and finding. The session resolves the last Git commit that changed each rule file separately from the platform commit. Full native-fill journaling is draft-only. Coverage of the applicable source and revision fields still needs review across signal, order, fill and run-status records. [Journal writer](../../paper_platform/session.py)
 
 - [x] **29.** A receipt for every run: code commit, inputs, constants used, files written with their fingerprints. DECIDED
 
@@ -150,7 +152,7 @@
 
 - [ ] **30.** Every order is traceable back: fill to order to rule version to the finding the rule rests on. DECIDED (plan 7d)
 
-  **In progress.** An order links to its signal, rule commit and research finding. PR 5 links each fill to the original order tag and records the commit that changed its rule file. Administrative liquidation links to the closing signal when one exists. Review is pending.
+  **In progress.** An order links to its signal, rule commit and research finding. PR 5 links each fill to the original order tag and records the commit that changed its rule file. Administrative liquidation links to the closing signal when one exists. The native-fill part of the chain is in draft. Review and merge of the fill-to-order-to-rule-to-finding path are pending. [Native execution](../../paper_platform/paper_execution.py) · [Journal writer](../../paper_platform/session.py)
 
 - [ ] **31.** An order is never sent twice. Each carries its own unique tag. DECIDED
 
@@ -158,7 +160,7 @@
 
 - [ ] **32.** Keys and tokens never in any file, print or commit. DECIDED
 
-  **In progress.** PR 5 fetches public source and purchased inputs anonymously. Where publication is enabled, the Actions secret goes directly to an SSH agent on the hosted runner. Git stores the markets-data push URL and uses the agent socket. Pushover and Render credentials come from secret stores. The historical sandbox credential was excluded from the migration. Its status was set aside at Greg’s request.
+  **In progress.** PR 5 fetches public source and purchased inputs anonymously. Where publication is enabled, the Actions secret goes directly to an SSH agent on the hosted runner. Git stores the markets-data push URL and uses the agent socket. Pushover and Render credentials come from secret stores. The historical sandbox credential was excluded from the migration. Its status was set aside at Greg’s request. The workflow credential changes are still in draft. [Data checkout and publication credentials](../../.github/actions/markets-data/action.yml)
 
 - [x] **33.** Output goes only to markets-data, never to the Markets code repository. DECIDED
 
