@@ -1,6 +1,6 @@
 """Durable DBN delivery journal and ordered MBO history for one market week."""
 
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime, time as wall_time, timedelta, timezone
 import json
 import fcntl
@@ -127,6 +127,41 @@ class CapturedFeed:
         self.trade_day = trade_day
         self.connection_id = connection_id
 
+    def _connection_end(self, db):
+        row = db.execute("SELECT opened_ns,ended_ns,status FROM connections WHERE id=?",
+                         (self.connection_id,)).fetchone()
+        if row is None:
+            raise CaptureFailure("capture connection unavailable")
+        opened, ended, status = row
+        if status == "recording":
+            with self.path.with_suffix(".lock").open("rb") as lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    return None
+                # A hard exit releases the lock. A clean exit may have committed after BEGIN.
+                db.commit()
+                db.execute("BEGIN")
+                ended, status = db.execute("SELECT ended_ns,status FROM connections WHERE id=?",
+                                           (self.connection_id,)).fetchone()
+                if status == "recording":
+                    status = "recorder exited without a terminal record"
+        last = db.execute("SELECT id,received_ns FROM frames WHERE connection_id=? ORDER BY id DESC LIMIT 1",
+                          (self.connection_id,)).fetchone()
+        last_mbo = db.execute("SELECT coalesce(position,replay_of) FROM frames WHERE connection_id=? "
+                              "AND (position IS NOT NULL OR replay_of IS NOT NULL) ORDER BY id DESC LIMIT 1",
+                              (self.connection_id,)).fetchone()
+        return dict(connection_id=self.connection_id, status=status, opened_ns=opened, ended_ns=ended,
+                    last_delivery_id=last[0] if last else None, last_received_ns=last[1] if last else None,
+                    last_mbo_position=last_mbo[0] if last_mbo else None)
+
+    def terminal_state(self):
+        if self.connection_id is None:
+            return None
+        with closing(sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+            db.execute("BEGIN")
+            return self._connection_end(db)
+
     def messages(self, *, follow=False, poll=False):
         uri = self.path.resolve().as_uri() + "?mode=ro"
         db = sqlite3.connect(uri, uri=True)
@@ -150,48 +185,18 @@ class CapturedFeed:
                     if self.connection_id is None:
                         row = db.execute("SELECT MAX(id) FROM connections").fetchone()
                         self.connection_id = row[0]
-                    connection = db.execute("SELECT opened_ns,ended_ns,status FROM connections WHERE id=?",
-                                            (self.connection_id,)).fetchone()
-                    if connection is None:
-                        raise CaptureFailure("capture connection unavailable")
-                    opened, ended, status = connection
+                    terminal = self._connection_end(db)
                     if identity["source"] == "live":
                         live_start = db.execute("SELECT position FROM live_starts WHERE connection_id=?",
                                                 (self.connection_id,)).fetchone()
-                    if status == "recording":
-                        # A hard writer exit releases its lock, even before SQLite records an end time.
-                        with self.path.with_suffix(".lock").open("rb") as lock:
-                            try:
-                                fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
-                            except BlockingIOError:
-                                pass
-                            else:
-                                # Start a new snapshot to include the writer's final commit.
-                                db.commit()
-                                db.execute("BEGIN")
-                                _, ended, status = db.execute(
-                                    "SELECT opened_ns,ended_ns,status FROM connections WHERE id=?",
-                                    (self.connection_id,),
-                                ).fetchone()
-                                if status == "recording":
-                                    status = "recorder exited without a terminal record"
-                                if identity["source"] != "live":
-                                    batch = db.execute(
-                                        "SELECT position,body,received_ns FROM frames WHERE position>=? "
-                                        "ORDER BY position LIMIT 512", (position,),
-                                    ).fetchall()
-                    if status != "recording" and (identity["source"] == "live" or not batch):
-                        last = db.execute("SELECT id,received_ns FROM frames WHERE connection_id=? "
-                                          "ORDER BY id DESC LIMIT 1", (self.connection_id,)).fetchone()
-                        last_mbo = db.execute(
-                            "SELECT coalesce(position,replay_of) FROM frames WHERE connection_id=? "
-                            "AND (position IS NOT NULL OR replay_of IS NOT NULL) ORDER BY id DESC LIMIT 1",
-                            (self.connection_id,),
-                        ).fetchone()
-                        terminal = dict(connection_id=self.connection_id, status=status, opened_ns=opened,
-                                        ended_ns=ended, last_delivery_id=last[0] if last else None,
-                                        last_received_ns=last[1] if last else None,
-                                        last_mbo_position=last_mbo[0] if last_mbo else None)
+                    elif terminal:
+                        # For stored input, drain the final committed batch before reporting EOF.
+                        batch = db.execute(
+                            "SELECT position,body,received_ns FROM frames WHERE position>=? "
+                            "ORDER BY position LIMIT 512", (position,),
+                        ).fetchall()
+                        if batch:
+                            terminal = None
                 db.commit()
                 if terminal is not None:
                     if poll:
