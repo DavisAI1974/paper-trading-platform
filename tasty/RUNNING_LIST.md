@@ -167,6 +167,13 @@ line here is a result.
     without `--orders`: it reads the live feed, runs all 32 strategies and writes each paper trade with both quotes
     at each end; nothing is sent to the sandbox. Each run still needs his go.
 
+24. 2026-11-24, Greg asked: "Is it creating the graphs for the ledger?" NO. The runner writes files of lines only
+    (`ledger.jsonl`, `events.jsonl`, `feed.jsonl`, `orders.jsonl`, `receipt.json`). It draws no picture of a trade
+    or of a run, and it writes nothing into the knowledge graph (the plan of 2026-11-23 left "the graph links" out
+    of the build). Nothing in the runner draws or links anything yet. To be built, on his word for which he means:
+    a picture for each paper trade (the prints, both quotes and the two lines from its open to its close), and/or
+    the links from each ledger line to its rule version and the finding the rule rests on.
+
 ## D. Runs
 
 1. 2026-11-23 evening (trade day Tue Nov 24, 2026), 8:05 pm to 8:12 pm Eastern. THE FIRST RUN WITH ORDERS, on Greg's
