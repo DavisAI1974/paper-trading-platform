@@ -150,7 +150,11 @@ jobs:
           if [[ -n "$ORIGINAL_RUN" ]]; then
             plan_args=(--replay-receipt "$GITHUB_WORKSPACE/original-journal/paper-trading/$ORIGINAL_RUN/receipt.json")
           fi
-          # A receipt replay runs the earlier commit's code, which has no such switch.
+          # A receipt replay runs the earlier commit's code, which has none of these switches.
+          # A run of the stored tape does not wait for each order's and each fill's own push.
+          if [[ -z "$ORIGINAL_RUN" ]]; then
+            plan_args+=(--keep-tape-pace)
+          fi
           if [[ "$PHONE_PAGE" == false && -z "$ORIGINAL_RUN" ]]; then
             plan_args+=(--no-phone-page)
           fi

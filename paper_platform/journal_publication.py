@@ -17,7 +17,11 @@ class JournalCut:
 
 
 class GitJournal:
-    def __init__(self, session, publication):
+    def __init__(self, session, publication, *, newest_only=False):
+        # newest_only: the runner does not wait for each push (run.py, --keep-tape-pace), so the worker
+        # publishes the newest boundary waiting and leaves out the ones before it. Each boundary is a longer
+        # prefix of the same files, so the newest holds every order and fill of the ones left out.
+        self.newest_only = newest_only
         self.session = session
         self.git = publication.command
         self.push_url = publication.push_url
@@ -138,6 +142,12 @@ class GitJournal:
         cut = None
         try:
             while (cut := self.queue.get()) is not None:
+                while self.newest_only and not self.queue.empty():
+                    newer = self.queue.get()
+                    if newer is None:
+                        self.queue.put(None)  # the end mark stays last, for this loop and for finish()
+                        break
+                    cut = newer
                 self._publish(cut)
         except Exception as error:
             with self.progress:

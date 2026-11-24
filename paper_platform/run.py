@@ -220,6 +220,10 @@ def main():
     # A short test: the run stops itself this many minutes after the first paced record of the trade day,
     # by the same path as a manual stop (positions flattened, receipt written, the phone told).
     p.add_argument("--stop-after-minutes", type=float)
+    # The run does not wait for each order's and each fill's own push to markets-data before the next
+    # tick. Every order and fill is still queued for a push at once, and a push carries the journal up to
+    # the newest one waiting. Without this the first run test covered 3 seconds of tape in 11 minutes.
+    p.add_argument("--keep-tape-pace", action="store_true")
     args = p.parse_args()
     if args.stop_after_minutes is not None and args.stop_after_minutes <= 0:
         p.error("the stop of a short test must be a positive number of minutes")
@@ -295,7 +299,7 @@ def main():
         pending = deque()
         with (s.folder / "events.jsonl").open(encoding="utf8") as f:
             pending.extend(json.loads(row) for row in f)
-        writer = GitJournal(s, pub)
+        writer = GitJournal(s, pub, newest_only=args.keep_tape_pace)
 
         def record_event(event):
             pending.append(event)
@@ -356,7 +360,8 @@ def main():
 
         def deliver():
             pub.deliver_pending(pending)
-            journal.wait_for_orders()
+            if not args.keep_tape_pace:
+                journal.wait_for_orders()
 
         while s.state == "active":
             if stopped.is_set():
