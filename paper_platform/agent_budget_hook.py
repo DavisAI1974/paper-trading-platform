@@ -14,9 +14,11 @@ The budget is the file `agent_budget.json` beside this script:
 
 `measure` names what is counted, and it has no default:
 
-- "last call": the size of the run's latest model call, all its input and its output together.
-  This is the figure Claude Code reports for a subagent when it ends.
-- "all calls": every model call of the run added together, all input and output of each.
+- "last call": the size of the last step of the run's latest model call, all its input and its
+  output together. This is the figure Claude Code reports for a subagent when it ends.
+- "all calls": every step of every model call of the run added together, all input and output of
+  each. A call that consults the advisor has three steps (the model, the advisor, the model again),
+  and the advisor's step is counted here and nowhere in the first measure.
 
 With no budget file there is no budget on record and the hook does nothing. The main conversation
 is never refused. A stop comes at the first tool call after the budget is passed, so the run goes
@@ -38,8 +40,12 @@ KINDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens
 MEASURES = ("last call", "all calls")
 
 
+def size(usage):
+    return sum(usage.get(kind) or 0 for kind in KINDS)
+
+
 def figures(transcript):
-    """The size of each model call. A call is written on several lines that share its message id."""
+    """The two measures. A call is written on several lines that share its message id."""
     calls = {}
     with transcript.open(encoding="utf-8") as lines:
         for line in lines:
@@ -48,9 +54,14 @@ def figures(transcript):
             except ValueError:
                 continue  # the line being written at this moment
             if isinstance(message, dict) and message.get("id") and isinstance(message.get("usage"), dict):
-                calls[message["id"]] = sum(message["usage"].get(kind) or 0 for kind in KINDS)
+                usage = message["usage"]
+                # `iterations` lists a call's steps. The usage beside it adds the model's steps only.
+                steps = [step for step in usage.get("iterations") or [] if isinstance(step, dict)] or [usage]
+                own = [step for step in steps if step.get("type", "message") == "message"] or steps
+                calls[message["id"]] = (size(own[-1]), sum(size(step) for step in steps))
     sizes = list(calls.values())
-    return {"calls": len(sizes), "last call": sizes[-1] if sizes else 0, "all calls": sum(sizes)}
+    return {"calls": len(sizes), "last call": sizes[-1][0] if sizes else 0,
+            "all calls": sum(total for _, total in sizes)}
 
 
 def phone(message):
