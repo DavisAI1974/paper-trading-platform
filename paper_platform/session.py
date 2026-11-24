@@ -586,8 +586,8 @@ class Session:
                 tick=_plain_attrs(t, "tick", left_out),
                 previous_trade_tick=_plain_attrs(self.engine.p, "previous_trade_tick", left_out),
             )
-            left_out.append(dict(name="engine.cl, engine.unsided_print_rules",
-                                 reason="the rules' own working state, not inputs the rules read as p.<name>"))
+            rules = self._rules_state(left_out)
+            paper = self._paper_state(left_out)
             book = None
             source = getattr(getattr(self, "feed", None), "book", None)
             if source is None:
@@ -608,11 +608,91 @@ class Session:
                                              feed_book_best=theirs, engine_tick_best=ours))
                 except Exception as error:
                     left_out.append(dict(name="book", reason=f"reading it raised {type(error).__name__}"))
-            state = dict(inputs=inputs, book=book, known_at_tape_ns=t["received"], left_out=left_out)
+            state = dict(inputs=inputs, book=book, rules=rules, paper=paper, known_at_tape_ns=t["received"],
+                         left_out=left_out)
             json.dumps(state, allow_nan=False)  # plain JSON or nothing
             return state, None
         except Exception as error:
             return None, f"reading the state raised {type(error).__name__}"
+
+    def _rules_state(self, left_out):
+        """The rules' own working state as the engine holds it now, each attribute by its own name. Reads only."""
+        out = {}
+        for attr in ("cl", "unsided_print_rules", "open", "unmonitored", "managers", "responses", "ended", "run_id"):
+            try:
+                got = _plain(getattr(self.engine, attr), f"rules.{attr}", left_out)
+            except Exception as error:
+                left_out.append(dict(name=f"rules.{attr}", reason=f"reading it raised {type(error).__name__}"))
+                continue
+            if got is not _LEFT:
+                out[attr] = got
+        try:
+            out["in_force"] = sorted(self.rules)
+        except Exception as error:
+            left_out.append(dict(name="rules.in_force", reason=f"reading it raised {type(error).__name__}"))
+        return out
+
+    def _paper_state(self, left_out):
+        """The paper venues' state: inventory, working orders, holding, cash, peak, exit attempts, the exit policy.
+
+        Prices are the tape's integer units (a Nautilus price's raw value divided by DBN_TO_NATIVE, as the venue does).
+        A market order has no price: null. Every attribute is read in its own try. Reads only.
+        """
+        out = {}
+
+        def take(target, name, path, read):
+            try:
+                got = _plain(read(), path, left_out)
+            except Exception as error:
+                left_out.append(dict(name=path, reason=f"reading it raised {type(error).__name__}"))
+                return
+            if got is not _LEFT:
+                target[name] = got
+
+        take(out, "answers_off", "paper.answers_off", lambda: sorted(self.answers_off))
+        take(out, "answers_unordered", "paper.answers_unordered", lambda: sorted(self.answers_unordered, key=str))
+        ex = self.execution
+        if ex is None:
+            out["execution"] = None
+            return out
+        take(out, "give_back_fraction", "paper.give_back_fraction",
+             lambda: None if ex.give_back is None else str(ex.give_back))
+        take(out, "also_before_profit", "paper.also_before_profit", lambda: getattr(ex, "also_before_profit", None))
+        venues = {}
+        for rule, venue in list(ex.venues.items()):
+            v = {}
+            where = f"paper.venues.{rule}"
+            take(v, "inventory", where + ".inventory", lambda: dict(venue.inventory))
+            take(v, "cash", where + ".cash", lambda: dict(venue.cash))
+            take(v, "peak", where + ".peak", lambda: dict(venue.peak))
+            take(v, "exit_attempts", where + ".exit_attempts", lambda: dict(venue.exit_attempts))
+            take(v, "holding", where + ".holding", lambda: sorted(venue.holding))
+            orders = {}
+            try:
+                from nautilus_trader.model.enums import order_side_to_str, order_status_to_str
+                from .nautilus_book import DBN_TO_NATIVE
+                for key, ids in list(venue.active_orders.items()):
+                    rows = []
+                    for order_id in sorted(ids):
+                        o = {}
+                        order = venue.orders[order_id][0]
+                        o["order_id"] = order_id
+                        take(o, "side", f"{where}.active_orders.{order_id}.side", lambda: order_side_to_str(order.side))
+                        take(o, "quantity", f"{where}.active_orders.{order_id}.quantity", lambda: int(order.quantity))
+                        take(o, "remaining_quantity", f"{where}.active_orders.{order_id}.remaining_quantity",
+                             lambda: int(order.leaves_qty))
+                        take(o, "price", f"{where}.active_orders.{order_id}.price",
+                             lambda: order.price.raw // DBN_TO_NATIVE if order.has_price else None)
+                        take(o, "status", f"{where}.active_orders.{order_id}.status",
+                             lambda: order_status_to_str(order.status))
+                        rows.append(o)
+                    orders[str(key)] = rows
+            except Exception as error:
+                left_out.append(dict(name=where + ".active_orders", reason=f"reading it raised {type(error).__name__}"))
+            v["active_orders"] = orders
+            venues[rule] = v
+        out["venues"] = venues
+        return out
 
     def _lines_at(self, e):
         """The dipole line and the exhaustion line as the engine holds them at this signal, or None.

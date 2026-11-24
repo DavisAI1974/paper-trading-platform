@@ -522,3 +522,33 @@ def test_the_gate_puts_state_in_the_question_and_only_its_counts_in_the_row():
     s.engine.last = dict(position=10, received=5)
     s.record(dict(action="open", rule="CL01", side="buy", trade_id="t2", position=11, received=5, exchange=4))
     assert "state" not in seen[1]
+
+
+# ---- the rules' own state and the paper state. Every object below is a stand-in I named; none is market data.
+def test_state_has_the_rules_working_state_and_the_paper_state_by_their_own_names():
+    from types import SimpleNamespace
+    s = _state_session(dict(position=11, received=5), _Stand(a=1))
+    s.engine = SimpleNamespace(last=s.engine.last, p=None, inputs=_Stand(a=1), cl=_Stand(armed=[1, 2]),
+                               unsided_print_rules=_Stand(count=3), open={"t1": dict(rule="CL01")}, unmonitored={},
+                               managers={}, responses=_Stand(pending={}), ended=False, run_id="r")
+    s.rules = {"CL02": {}, "CL01": {}}
+    s.answers_off, s.answers_unordered = {"CL01"}, {"t9"}
+    state, why = s._state_at(dict(position=11, received=5))
+    assert why is None
+    r = state["rules"]
+    assert r["cl"] == dict(armed=[1, 2]) and r["unsided_print_rules"] == dict(count=3)
+    assert r["open"] == {"t1": dict(rule="CL01")} and r["responses"] == dict(pending={}) and r["ended"] is False
+    assert r["run_id"] == "r" and r["in_force"] == ["CL01", "CL02"]
+    assert state["paper"]["answers_off"] == ["CL01"] and state["paper"]["answers_unordered"] == ["t9"]
+    assert state["paper"]["execution"] is None
+    assert not any("engine.cl" in x["name"] for x in state["left_out"])
+    # a venue stand-in: its fields by their own names, a working order read attribute by attribute
+    order = _Stand(side=None, quantity=2, leaves_qty=1, price=None, has_price=False, status=None)
+    venue = _Stand(inventory={"t1": 2}, cash={"t1": -50}, peak={"t1": 7}, exit_attempts={}, holding={"t1"},
+                   active_orders={"t1": {"o1"}}, orders={"o1": (order, "t1", "open", None)})
+    s.execution = _Stand(give_back=None, also_before_profit=False, venues={"CL01": venue})
+    state, _ = s._state_at(dict(position=11, received=5))
+    v = state["paper"]["venues"]["CL01"]
+    assert v["inventory"] == {"t1": 2} and v["cash"] == {"t1": -50} and v["holding"] == ["t1"] and v["peak"] == {"t1": 7}
+    assert state["paper"]["give_back_fraction"] is None and state["paper"]["also_before_profit"] is False
+    assert "active_orders" in v and json.dumps(state, allow_nan=False)
