@@ -11,9 +11,16 @@ Use the marked checklist as the sole running list. Update the text beneath the r
 
 ## Current ownership
 
-Codex owns **1–19** and is working on **1**, live NG paper trading. Ccode owns **20–35**, including the independent review under #35. Both use the same branch and draft PR. Commit each change with its status under the corresponding number in the running checklist. Keep work on one number at a time and record any blocker that needs Greg.
+Codex owns **1–19** and has completed the build pass through #19. Ccode owns **20–35**, including the independent review under #35. Both use the same branch and draft PR. Commit each change with its status under the corresponding number in the running checklist. Keep work on one number at a time and record any blocker that needs Greg.
 
 The family agents supplied placement, size and manager instructions for all 32 strategies. The [NGX3 plan](../../paper_platform/execution_plans/ngx3-12be6ea6e40347def5f574b1c2f36093bba99200.json) records the purchased-tape contract and those decisions. The live workflow takes the policies from that plan and obtains the contract definition from the feed.
+
+## Outstanding work on 1–19
+
+- **Already checked:** 3, 4, 5, 8, 10, 11, 13, 14, 15 and 19.
+- **Draft and operational evidence:** 1, 2, 6, 9, 12 and 17. The live session needs the GitHub and Render configuration listed under #1 and Greg’s explicit go. Week continuity needs a full live week. Replay parity needs the original live receipt and its replay.
+- **Draft implementation awaiting merge:** 16 and 18. Individual trade rows retain interruption exposure. CL16 and CL17 record the affected trade and source when quote information is missing.
+- **Deferred decision:** 7. Encrypted Git checkpoints preserve captured deliveries up to their last published boundary. Greg deferred the storage choice for protecting original receive timestamps between that boundary and a host failure.
 
 ## Existing Ccode handoff notes
 

@@ -46,7 +46,7 @@
 
 - [ ] **7.** Everything the feed sends is recorded whole, as it arrives, with our receive time in nanoseconds. Raw, nothing dropped. DECIDED
 
-  **Recovery built in draft.** Each encrypted checkpoint identifies its last durable raw delivery, receive time, connection and MBO position. Restore publishes the complete SQLite file atomically and accepts earlier checkpoints. Run receipts distinguish first-copy timestamps observed during gateway replay from live delivery. A host destroyed between remote checkpoints can still lose original receive timestamps. Eliminating that interval requires recorder storage that survives host loss; Git snapshots alone cannot recover it.
+  **Recovery built in draft.** Each encrypted checkpoint identifies its last durable raw delivery, receive time, connection and MBO position. Restore publishes the complete SQLite file atomically and accepts earlier checkpoints. Run receipts distinguish first-copy timestamps observed during gateway replay from live delivery. A host destroyed between remote checkpoints can still lose original receive timestamps. Protecting that interval requires storage that survives recorder-host loss. Greg deferred that storage decision to the end.
 
   **In progress.** PR 5 records DBN deliveries and host receive times and adds recovery checkpoints. A replacement runner can restore encrypted checkpoints from markets-data. The recorder persists the connection ID, last durable frame position and termination reason. The final publisher also retries a locally committed checkpoint after a failed push, even when the capture has not changed. If the capture host is lost after a local write and before its checkpoint reaches markets-data, exact receive timestamps for that interval can be lost. Lossless recovery remains open. [Recorder](../../paper_platform/record_mbo.py) · [Checkpoint publisher](../../paper_platform/capture_backup.py)
 
@@ -110,7 +110,7 @@
 
   **Fixed in draft.** On a print missing its bid, offer or both, every open CL16 or CL17 trade gets one unscored event naming the missing fields, its trade ID and the source print. Its observation ends. The rule clears its quote-run history across the gap. CL17 requires an observed step on the affected side before another touch at that level qualifies. Administrative closure remains separate from research exits. The normal unknown aggressor still qualifies for both strategies. Merge remains outstanding.
 
-  **Finding in the earlier draft.** The CX path journals the missing fields when it cannot assess an open trade. CL16 and CL17 also need quotes to monitor their exits. On a print missing its bid or offer, their handler clears the current quote facts and returns. An already-open trade gets neither an exit assessment nor a journal event identifying the missing input. That trade needs a “not scored” record with its ID, source print and missing field. An unknown aggressor is a valid input for these two rules. [Unsided-print rules](../../paper_platform/unsided_print_rules.py) · [Decision engine](../../paper_platform/engine.py)
+  [Unsided-print rules](../../paper_platform/unsided_print_rules.py) · [Decision engine](../../paper_platform/engine.py)
 
 ## THE RUN
 
