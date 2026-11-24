@@ -1,4 +1,7 @@
-"""Claude's fifteen rules (VERSIONS.md v2) on the tastytrade feed (Part A). Nine run; six cannot (no single orders).
+"""Claude's rules (VERSIONS.md: CL01 to CL15 v2, CL16 and CL17 v1) on the tastytrade feed. Of the fifteen, nine run
+and six cannot (no single orders). CL16 and CL17 (Greg, 2026-11-24) are made for the print with no side and are
+given every print; the fifteen are given sided prints only, and a close that a print with no side showed them is
+made at the next sided print and names both (rule_base).
 
 Written from the rule text. Stand-ins used, all named in RULES_ON_TASTY_FEED_20261123.md and the plan: S1 the feed's
 own clock, S2 "decides at the feed message (print) that shows its trigger" and "in a later exchange event" read as
@@ -14,6 +17,8 @@ from __future__ import annotations
 from root.calcs.quote_runs import FURTHER, STARTED, STEP_BACK
 from tasty.paper.lines import AT_MOMENT, CUT, EMPTY, MISSING, ON_TRADE, sign_of
 from tasty.paper.rule_base import BUY, RIGHT, SELL, WRONG, Rule, Snapshot, both, side_of_run, when
+
+NOT_SHOWN_TO_IT = 'trigger shown by a print with no side: not opened (rule 5)'
 
 BID, ASK = 'best bid', 'best ask'
 CUT_RUN = 'first quote run cut at the start'
@@ -66,9 +71,13 @@ class CL05(Rule):
                 if f['fact'] == 'new furthest price':
                     t['second'] = True
                 elif f['fact'] == 'leg ended':
-                    out += self.close(tid, 'the print that ends the leg', RIGHT if t['second'] else WRONG)
+                    out += self.close(tid, 'the print that ends the leg', RIGHT if t['second'] else WRONG,
+                                      fact=f)
         for f in snap.leg_facts:
-            if not (f['here'] and f['fact'] == 'leg started'):
+            if f['fact'] != 'leg started':
+                continue
+            if not f['here']:
+                self.passed(NOT_SHOWN_TO_IT)
                 continue
             self.arm()
             if f['cut']:
@@ -116,7 +125,7 @@ class CL06(Rule):
                     v = RIGHT if t['further'] else (
                         both('a quote stepped further the same way', 'a quote stepped the other way') if same
                         else WRONG)
-                    out += self.close(tid, 'the first step the other way by either quote', v)
+                    out += self.close(tid, 'the first step the other way by either quote', v, fact=g[0])
                 elif same:
                     t['further'] = True
             if ups and downs:
@@ -130,6 +139,8 @@ class CL06(Rule):
                 self.U, before = {}, len(self.D)
                 self.D.update(downs)
                 begun, side, state = before < 2 and len(self.D) == 2, SELL, self.D
+            if begun and not here:
+                self.passed(NOT_SHOWN_TO_IT)
             if not (begun and here):
                 continue
             if snap.print.bid is None or snap.print.offer is None or snap.print.offer <= snap.print.bid:
@@ -189,6 +200,9 @@ class CL07(_Hump):
         return out
 
 
+STEP_BACK_OF_IT = "the quote's first step back"
+
+
 class CL08(_Hump):
     code, title = 'CL08', 'fresh trading against the dipole'
 
@@ -214,13 +228,14 @@ class CL08(_Hump):
                     ev.append(((e['ended_ns'], snap.idx if e['at_print'] else -1), 'the hump ended',
                                e['known_late'], dict(ended_ns=e['ended_ns'])))
             if t['back'] is not None:
-                ev.append((t['back'], "the quote's first step back", False, None))
+                ev.append((t['back'], STEP_BACK_OF_IT, False, None))
             if ev:
                 at, why, late, detail = min(ev, key=lambda x: x[0])
                 a = t['second_at']
                 here = [x[1] for x in ev if x[0] == at] + (["that quote's second step"] if a == at else [])
                 v = both(*here) if len(here) > 1 else (RIGHT if a is not None and a < at else WRONG)
-                out += self.close(tid, why, v, known_late=late, detail=detail)
+                out += self.close(tid, why, v, known_late=late, detail=detail,
+                                  shown_idx=at[1] if why == STEP_BACK_OF_IT else None)
         for e in snap.lines.hump_ends:
             self.pending.pop(e['began_read'], None)
         h = snap.lines.hump
@@ -237,11 +252,12 @@ class CL08(_Hump):
             else:
                 self.counts['began_at_a_moment_not_opened'] = self.counts.get('began_at_a_moment_not_opened', 0) + 1
         for f in _moves(snap.run_facts):
-            if not f['here']:
-                continue
             for read, p in list(self.pending.items()):
                 if f['quote'] == p['quote'] and f['direction'] == p['away'] and f['time_ns'] > p['time_ns'] \
                         and f['idx'] > p['idx']:
+                    if not f['here']:
+                        self.passed(NOT_SHOWN_TO_IT)
+                        continue
                     del self.pending[read]
                     out += self.open(BUY if p['side'] > 0 else SELL, ('hump', read),
                                      dict(hump_side=p['side'], dipole_before=p['dipole_before'], quote=p['quote'],
@@ -265,12 +281,15 @@ class _SecondStep(Rule):
                     if self.with_price:
                         t['third'] = True
                     else:
-                        out += self.close(tid, "the run's third step", WRONG)
+                        out += self.close(tid, "the run's third step", WRONG, fact=f)
                 elif f['fact'] == STEP_BACK:
                     right = t['third'] if self.with_price else True
-                    out += self.close(tid, "the run's first step back", RIGHT if right else WRONG)
+                    out += self.close(tid, "the run's first step back", RIGHT if right else WRONG, fact=f)
         for f in snap.run_facts:
-            if not (f['here'] and f['fact'] == FURTHER and f['moves'] == 2):
+            if not (f['fact'] == FURTHER and f['moves'] == 2):
+                continue
+            if not f['here']:
+                self.passed(NOT_SHOWN_TO_IT)
                 continue
             self.arm()
             if f['cut']:
@@ -313,7 +332,8 @@ class CL13(Rule):
                     if f['time_ns'] > t['time_ns']:
                         t['further'] = True
                 else:
-                    out += self.close(tid, "the swept quote's first step back", RIGHT if t['further'] else WRONG)
+                    out += self.close(tid, "the swept quote's first step back", RIGHT if t['further'] else WRONG,
+                                      fact=f)
                     break
         p = snap.print
         if p.time_ns != self.time:
@@ -354,9 +374,9 @@ class CL14(Rule):
             for tid, t in list(self.trades.items()):
                 if (f['quote'], f['run_start_position']) == t['run']:
                     if f['fact'] == STEP_BACK:
-                        out += self.close(tid, "the run's first step back", RIGHT)
+                        out += self.close(tid, "the run's first step back", RIGHT, fact=f)
                     elif f['fact'] == FURTHER:
-                        out += self.close(tid, "the run's next step the same way", WRONG)
+                        out += self.close(tid, "the run's next step the same way", WRONG, fact=f)
         # The quote a print carries stood BEFORE its trade (on both 7e recordings every sell but one printed at its
         # own bid and every buy at its own ask), so a step this print's own quote shows came before this print's
         # trade: this print can be the first sell (or buy) since that step. Step 0 of 2026-11-24 found the earlier
@@ -402,11 +422,14 @@ class CL15(Rule):
                 if f['fact'] == FURTHER and f['moves'] == 2:
                     t['second'] = True
                 elif f['fact'] == STEP_BACK:
-                    out += self.close(tid, "the new run's first step back", RIGHT if t['second'] else WRONG)
+                    out += self.close(tid, "the new run's first step back", RIGHT if t['second'] else WRONG,
+                                      fact=f)
         for f in snap.run_facts:
             if f['fact'] != STEP_BACK:
                 continue
             a, q = self.ended[f['quote']], f['quote']
+            if f['moves'] == 1 and a is not None and a['moves'] >= 2 and not f['here']:
+                self.passed(NOT_SHOWN_TO_IT)
             if f['here'] and f['moves'] == 1 and a is not None and a['moves'] >= 2:
                 self.arm()
                 if a['cut']:
@@ -419,7 +442,82 @@ class CL15(Rule):
         return out
 
 
-RULES = [CL01, CL02, CL03, CL04, CL05, CL06, CL07, CL08, CL09, CL10, CL11, CL12, CL13, CL14, CL15]
+class CL16(Rule):
+    """Given every print. Its trigger is a print with NO side whose own quote shows a step of either quote."""
+    code, title, reads_no_side = 'CL16', 'a step of the quote first shown by a print with no side', True
+
+    def decide(self, snap: Snapshot):
+        out = []
+        for f in snap.run_facts:
+            for tid, t in list(self.trades.items()):
+                if (f['quote'], f['run_start_position']) != t['run']:
+                    continue
+                if f['fact'] == FURTHER:
+                    t['further'] = True
+                elif f['fact'] == STEP_BACK:
+                    out += self.close(tid, "that quote's first step back", RIGHT if t['further'] else WRONG, fact=f)
+        if snap.print.side is not None:
+            return out
+        for f in _moves(snap.run_facts):
+            self.arm()
+            if f['cut']:
+                self.missing(CUT_RUN)
+                continue
+            out += self.open(side_of_run(f['direction']), ('run', f['quote'], f['run_start_position']),
+                             dict(quote=f['quote'], direction=f['direction'], price_before=f['price_before_tick'],
+                                  price_now=f['price_now'], run_start_position=f['run_start_position'],
+                                  run_moves=f['moves']),
+                             run=(f['quote'], f['run_start_position']), further=False)
+        return out
+
+
+class CL17(Rule):
+    """Given every print. Its trigger is a print with NO side that trades at its own best offer (or best bid), the
+    first such print there since that quote last stepped."""
+    code, title, reads_no_side = 'CL17', 'the print with no side, taken at the quote it traded at', True
+
+    def __init__(self):
+        super().__init__()
+        self.steps = {BID: 0, ASK: 0}               # how many steps each quote has made
+        self.taken = {BID: None, ASK: None}         # the step count at which a trade was last opened there
+
+    def decide(self, snap: Snapshot):
+        out = []
+        for f in _moves(snap.run_facts):
+            self.steps[f['quote']] += 1
+            for tid, t in list(self.trades.items()):
+                if f['quote'] != t['quote']:
+                    continue
+                if f['direction'] == t['away']:
+                    t['further'] = True
+                else:
+                    out += self.close(tid, 'the first step back of the quote it traded at',
+                                      RIGHT if t['further'] else WRONG, fact=f)
+        p = snap.print
+        if p.side is not None:
+            return out
+        if p.price is None or p.bid is None or p.offer is None:
+            self.missing('print price, bid or offer')
+            return out
+        at_offer, at_bid = p.price == p.offer, p.price == p.bid
+        if at_offer and at_bid:
+            self.missing('the print is at both its bid and its offer')
+            return out
+        if not (at_offer or at_bid):
+            self.passed('the print with no side is at neither its bid nor its offer')
+            return out
+        q, away, side = (ASK, 'up', BUY) if at_offer else (BID, 'down', SELL)
+        if self.taken[q] == self.steps[q]:
+            return out                                # not the first one there since that quote last stepped
+        self.arm()
+        opened = self.open(side, ('there', q, self.steps[q]), dict(quote=q, level=p.price, print_price=p.price),
+                           quote=q, away=away, further=False)
+        if opened:
+            self.taken[q] = self.steps[q]
+        return out + opened
+
+
+RULES = [CL01, CL02, CL03, CL04, CL05, CL06, CL07, CL08, CL09, CL10, CL11, CL12, CL13, CL14, CL15, CL16, CL17]
 
 
 def all_rules() -> list:

@@ -152,3 +152,134 @@ def test_cl14_opens_on_the_first_print_of_the_other_side_since_the_step(recordin
             assert raw[j - 1][1][field] > level       # the offer stepped down to it
         earlier = [raw[k][0] for k in range(j, i) if raw[k][1].get('aggressorSide') == side]
         assert not earlier, f'{e["trade_id"]} opened at {raw[i][0]} but {earlier[0]} was the first {side} since the step'
+
+
+FIFTEEN = {f'CL{n:02d}' for n in range(1, 16)}
+
+
+def _side(e):
+    return {'BUY': 'B', 'SELL': 'S'}.get(e.get('aggressorSide'))
+
+
+def _next_sided(raw, i):
+    j = i
+    while j < len(raw) and _side(raw[j][1]) is None:
+        j += 1
+    return j
+
+
+def test_the_lines_read_at_a_print_with_no_side_equal_one_pass(recording):
+    """For the rules that read every print: the two lines at a print with no side are the latest read of
+    tick.reads over the sided trades before it, run afresh up to that print's feed time."""
+    eng = run(recording)
+    prints = [e for e in feed_tasty.events_from_recording(recording) if isinstance(e, PRINT)]
+    assert len(eng.lines_every_print.at_every_print) == len(prints)
+    first, seen, checked = prints[0].time_ns, [], 0
+    for (idx, sided, exh, dip), p in zip(eng.lines_every_print.at_every_print, prints):
+        if p.side is not None and p.size is not None:
+            seen.append(p)
+            assert sided
+            continue
+        assert not sided
+        t = np.array([q.time_ns for q in seen], np.int64)
+        buy = np.array([q.side == 'B' for q in seen], bool)
+        size = np.array([int(q.size) for q in seen], np.int64)
+        for span, got in ((tick.LINE_NS, exh), (tick.LEAN_NS, dip)):
+            r = tick.reads(t, buy, size, span, p.time_ns + 1)
+            flow, quiet = tick.line(r['bought'], r['sold'])
+            if p.time_ns - first < span:
+                want = MISSING
+            else:
+                want = EMPTY if (len(flow) == 0 or quiet[-1]) else float(flow[-1])
+            assert got == want, f'print {idx} (no side), span {span}: read {got}, one pass {want}'
+        checked += 1
+    assert checked, 'the recording has no print without a side: the check would prove nothing'
+
+
+def test_a_close_names_the_print_that_showed_it(recording):
+    """CL06 (closes at the first step the other way by either quote) and CL05 (closes at the print that ends the
+    leg), checked from the raw messages: "closed" is the print that showed it, with that print's own bid and offer.
+    Where that print has no side the line is late and "acted_at" is the next print that has one (stand-in S7)."""
+    raw = _raw_prints(recording)
+    at = {place: i for i, (place, _) in enumerate(raw)}
+    records = [r for r in run(recording).ledger.records() if r['strategy'] in ('CL05', 'CL06') and r['closed']]
+    assert {r['strategy'] for r in records} == {'CL05', 'CL06'}
+    late = 0
+    for r in records:
+        i = at[tuple(r['opened']['place'])]
+        want = None
+        if r['strategy'] == 'CL06':
+            for j in range(i + 1, len(raw)):
+                a, b = raw[j - 1][1], raw[j][1]
+                moved = [(b[f] > a[f]) - (b[f] < a[f]) for f in ('bidPrice', 'askPrice')]
+                if (-1 if r['side'] == 'BUY' else 1) in moved:
+                    want = j
+                    break
+        else:
+            last = raw[i][1]['price']
+            for j in range(i + 1, len(raw)):
+                px = raw[j][1]['price']
+                if px != last:
+                    if (px > last) != (r['side'] == 'BUY'):
+                        want = j
+                        break
+                    last = px
+        assert want is not None and tuple(r['closed']['place']) == raw[want][0], \
+            f"{r['trade_id']}: closed at {r['closed']['place']}, the raw messages show it at {raw[want][0]}"
+        assert (r['closed']['bid'], r['closed']['offer']) == (raw[want][1]['bidPrice'], raw[want][1]['askPrice'])
+        if _side(raw[want][1]) is None:
+            late += 1
+            acted = _next_sided(raw, want)
+            assert r['closed']['known_late'] and 'S7' in r['stand_ins']
+            assert tuple(r['closed']['acted_at']['place']) == raw[acted][0]
+        else:
+            assert 'acted_at' not in r['closed']
+    assert late, 'no close was shown by a print with no side on this recording: the late path was not checked'
+
+
+def test_the_fifteen_never_act_at_a_print_with_no_side(recording):
+    raw = dict(_raw_prints(recording))
+    for e in run(recording).ledger.events:
+        if e['strategy'] in FIFTEEN:
+            assert _side(raw[tuple(e['at']['place'])]) is not None, f"{e['trade_id']} acted at a print with no side"
+
+
+def test_cl16_opens_on_a_quote_step_shown_by_a_print_with_no_side(recording):
+    raw = _raw_prints(recording)
+    at = {place: i for i, (place, _) in enumerate(raw)}
+    records = [r for r in run(recording).ledger.records() if r['strategy'] == 'CL16']
+    assert records, 'CL16 opened nothing on the recording: the check would prove nothing'
+    for r in records:
+        i = at[tuple(r['opened']['place'])]
+        field = 'bidPrice' if r['trigger']['quote'] == 'best bid' else 'askPrice'
+        assert _side(raw[i][1]) is None and i > 0
+        before, now = raw[i - 1][1][field], raw[i][1][field]
+        assert (now > before) if r['side'] == 'BUY' else (now < before)
+        if r['closed']:                                # the first step of that quote the other way, at its own print
+            j = next(k for k in range(i + 1, len(raw))
+                     if ((raw[k][1][field] < raw[k - 1][1][field]) if r['side'] == 'BUY'
+                         else (raw[k][1][field] > raw[k - 1][1][field])))
+            assert tuple(r['closed']['place']) == raw[j][0] and 'acted_at' not in r['closed']
+
+
+def test_cl17_opens_on_a_print_with_no_side_at_its_own_quote(recording):
+    raw = _raw_prints(recording)
+    at = {place: i for i, (place, _) in enumerate(raw)}
+    records = [r for r in run(recording).ledger.records() if r['strategy'] == 'CL17']
+    assert records, 'CL17 opened nothing on the recording: the check would prove nothing'
+    opened_at = {tuple(r['opened']['place']) for r in records}
+    for r in records:
+        e = raw[at[tuple(r['opened']['place'])]][1]
+        assert _side(e) is None
+        assert e['price'] == (e['askPrice'] if r['side'] == 'BUY' else e['bidPrice'])
+    # every print with no side that is the first at its quote since that quote last stepped opened a trade
+    first_there = {'bidPrice': True, 'askPrice': True}
+    for i, (place, e) in enumerate(raw):
+        for f in first_there:
+            if i and e[f] != raw[i - 1][1][f]:
+                first_there[f] = True
+        if _side(e) is None:
+            f = 'askPrice' if e['price'] == e['askPrice'] else 'bidPrice'
+            assert e['price'] == e[f]
+            assert (place in opened_at) == first_there[f], f'print {place}: opened {place in opened_at}, first there {first_there[f]}'
+            first_there[f] = False

@@ -7,6 +7,14 @@ print: correctness first.
 
 EMPTY (nothing traded in the span) is kept apart from zero. MISSING (G3): until a span of feed time has passed since
 the first print seen, that line reads MISSING; so does a hump whose start falls there.
+
+TWO WAYS TO FOLLOW THE LINES. `LiveLines()` is for the rules that never see a print with no side (CL01 to CL15,
+their rule 5): such a print gives nothing back, and what happened since the print before with a side is handed on at
+the next one with a side. `LiveLines(every_print=True)` is for the rules that read every print (CL16, CL17 and
+Codex's fifteen): a print with no side is still not IN the lines, but the lines are READ at it: the two values as
+they stand at its feed time and the moments since the print before at which trades only left a span. One tie is put
+off there: a moment that falls on that print's very millisecond is handed on at the next print (tick.reads joins
+such a moment to a trade received at it, and one may still come); the two values read at the print already have it.
 """
 from __future__ import annotations
 
@@ -34,6 +42,7 @@ def sign_of(v) -> Optional[int]:
 @dataclass(frozen=True)
 class LineState:
     idx: int                      # index of this print among all prints seen
+    sided: bool                   # this print carries a side and a size: its trade is in the lines
     exh: object                   # 20-second line at this print: float, EMPTY or MISSING
     dip: object                   # 60-second line at this print
     dip_before: object            # 60-second line at the read just before this print's read
@@ -44,15 +53,17 @@ class LineState:
 
 
 class LiveLines:
-    def __init__(self):
-        self.t, self.buy, self.size, self.keys = [], [], [], []
-        self.first_time = None
+    def __init__(self, every_print: bool = False):
+        self.every_print = every_print
+        self.t, self.buy, self.size = [], [], []
+        self.first_time = self.last_key = None
         self.n_prints = self.n_unsided = self.n_sided = self.n_no_size = 0
         self.n20 = self.n60 = 0                      # reads already handed on
         self.cur = None                              # the hump in being
         self.last_side = 'start'                     # sign of the previous 20-second read; None = MISSING
         self.unsided_since = 0
         self.log = []                                # (sided index, exh, dip) at each sided print, for the checks
+        self.at_every_print = []                     # (print index, sided, exh, dip) at every print given back
 
     def _value(self, r, quiet, flow, k, span):
         if int(r['moment'][k]) - self.first_time < span:
@@ -63,21 +74,23 @@ class LiveLines:
         self.n_prints += 1
         if self.first_time is None:
             self.first_time = p.time_ns
-        if p.side is None:
-            self.n_unsided += 1
-            self.unsided_since += 1
-            return None
-        if p.size is None:
-            self.n_no_size += 1                      # a missing input: not in the lines, counted
-            self.unsided_since += 1
-            return None
         key = (p.time_ns, p.sequence)
-        if self.keys and key < self.keys[-1]:
+        if self.last_key is not None and key < self.last_key:
             raise ValueError(f'print {p.place} is earlier in feed time than one already read: the lines cannot be '
                              f'kept causal (STOP)')
-        self.keys.append(key)
-        self.t.append(p.time_ns); self.buy.append(p.side == 'B'); self.size.append(int(p.size))
-        self.n_sided += 1
+        self.last_key = key
+        sided = p.side is not None and p.size is not None
+        if p.side is None:
+            self.n_unsided += 1
+        elif p.size is None:
+            self.n_no_size += 1                      # a missing input: not in the lines, counted
+        if not sided:
+            self.unsided_since += 1
+            if not self.every_print:
+                return None
+        else:
+            self.t.append(p.time_ns); self.buy.append(p.side == 'B'); self.size.append(int(p.size))
+            self.n_sided += 1
         t, buy, size = np.array(self.t, np.int64), np.array(self.buy, bool), np.array(self.size, np.int64)
         until = p.time_ns + 1
         r20 = tick.reads(t, buy, size, tick.LINE_NS, until)
@@ -85,19 +98,24 @@ class LiveLines:
         f20, q20 = tick.line(r20['bought'], r20['sold'])
         f60, q60 = tick.line(r60['bought'], r60['sold'])
         mine = self.n_sided - 1
-        assert r20['trade'][-1] == mine and r60['trade'][-1] == mine
+        if sided:
+            assert r20['trade'][-1] == mine and r60['trade'][-1] == mine
+            end20, end60 = len(r20['moment']), len(r60['moment'])
+        else:                                        # hand on only the reads before this print's own millisecond
+            end20 = max(self.n20, int(np.searchsorted(r20['moment'], p.time_ns, 'left')))
+            end60 = max(self.n60, int(np.searchsorted(r60['moment'], p.time_ns, 'left')))
         v20 = lambda k: self._value(r20, q20, f20, k, tick.LINE_NS)
         v60 = lambda k: self._value(r60, q60, f60, k, tick.LEAN_NS)
-        # S5: moments since the previous print at which trades only left a span, with both lines at each
-        moments = sorted({int(r20['moment'][k]) for k in range(self.n20, len(r20['moment'])) if r20['trade'][k] == tick.NONE}
-                         | {int(r60['moment'][k]) for k in range(self.n60, len(r60['moment'])) if r60['trade'][k] == tick.NONE})
+        # S5: moments since the print before at which trades only left a span, with both lines at each
+        moments = sorted({int(r20['moment'][k]) for k in range(self.n20, end20) if r20['trade'][k] == tick.NONE}
+                         | {int(r60['moment'][k]) for k in range(self.n60, end60) if r60['trade'][k] == tick.NONE})
         late = []
         for m in moments:
             a, b = int(np.searchsorted(r20['moment'], m, 'right')) - 1, int(np.searchsorted(r60['moment'], m, 'right')) - 1
             late.append(dict(moment_ns=m, exh=v20(a), dip=v60(b)))
         # humps over the new reads of the 20-second line
         begins, ends = [], []
-        for k in range(self.n20, len(r20['moment'])):
+        for k in range(self.n20, end20):
             val = v20(k)
             s, at_trade = sign_of(val), r20['trade'][k] != tick.NONE
             if s is None:
@@ -116,14 +134,26 @@ class LiveLines:
                                 began_idx=idx if at_trade else None)
                 begins.append(self.cur)
             self.last_side = s
-        self.n20, self.n60 = len(r20['moment']), len(r60['moment'])
+        self.n20, self.n60 = end20, end60
         k20, k60 = len(r20['moment']) - 1, len(r60['moment']) - 1
-        dip_before = v60(k60 - 1) if k60 >= 1 else MISSING
-        exh, dip = v20(k20), v60(k60)
+        if sided:
+            dip_before = v60(k60 - 1) if k60 >= 1 else MISSING
+            exh, dip = v20(k20), v60(k60)
+        else:                                        # the two lines as they stand at this print's feed time
+            exh = self._standing(q20, f20, k20, tick.LINE_NS, p.time_ns)
+            dip = dip_before = self._standing(q60, f60, k60, tick.LEAN_NS, p.time_ns)
         hump = None
         if self.cur is not None:
             hump = dict(self.cur, began_here=any(b is self.cur for b in begins))
-        state = LineState(idx, exh, dip, dip_before, hump, tuple(ends), tuple(late), self.unsided_since)
-        self.unsided_since = 0
-        self.log.append((mine, exh, dip, int(r20['trade'][-1]), r20['moment'][-1], r60['moment'][-1]))
+        state = LineState(idx, sided, exh, dip, dip_before, hump, tuple(ends), tuple(late), self.unsided_since)
+        self.at_every_print.append((idx, sided, exh, dip))
+        if sided:
+            self.unsided_since = 0
+            self.log.append((mine, exh, dip, int(r20['trade'][-1]), r20['moment'][-1], r60['moment'][-1]))
         return state
+
+    def _standing(self, quiet, flow, k, span, now_ns):
+        """A line as it stands at a print that is not in it: its latest read; whole or not is judged at this time."""
+        if now_ns - self.first_time < span:
+            return MISSING
+        return EMPTY if (k < 0 or quiet[k]) else float(flow[k])
