@@ -725,3 +725,30 @@ def test_the_row_counts_the_layers_and_the_whole_question_round_trips_through_th
     s._state_at = lambda e: (dict(book=None, inputs=dict(strategy_inputs={}, tick={}), bad=float("nan")), None)
     s.record(dict(action="open", rule="CL01", side="buy", trade_id="t2", position=11, received=5, exchange=4))
     assert "state" not in seen[1] and "JSON" in rows[-2]["state_left_out"]
+
+
+def test_the_market_series_writers_with_stand_in_messages(tmp_path):
+    from paper_platform.trial import MarketSeries, print_line, quote_line
+
+    def stand(received, bid, ask, action="A", side="N", price=0, size=0, period="trade day"):  # a stand-in message
+        return dict(source_sha256="stand-in-sha", record_index=received, period=period, best_bid=bid, best_ask=ask,
+                    raw=dict(ts_recv=received, ts_event=received - 1, action=action, side=side, price=price, size=size))
+
+    assert quote_line(stand(5, 30, 40)) == dict(tape_received_ns=5, exchange_ns=4, reference=["stand-in-sha", 5],
+                                                bid=30, ask=40)
+    assert set(print_line(stand(5, 30, 40, "T", "B", 31, 2))) == {"tape_received_ns", "exchange_ns", "reference", "price",
+                                                                    "size", "aggressor"}
+    carrying = dict(stand(5, 30, 40), best_bid_size=3, best_ask_size=4)
+    assert quote_line(carrying)["bid_size"] == 3 and quote_line(carrying)["ask_size"] == 4
+    series = MarketSeries(tmp_path, begin_ns=10)
+    for m in (stand(1, 30, 40), stand(2, 30, 41),  # before the stretch: read, not written
+              stand(10, 30, 41), stand(11, 30, 41, "T", "A", 41, 1), stand(12, 31, 41), stand(13, None, 41),
+              stand(14, 31, 41, period="vendor snapshot"), stand(15, 31, 41, "T", "N", 31, 5)):
+        series.add(m)
+    series.close()
+    quotes = [json.loads(x) for x in (tmp_path / "quotes.jsonl").read_text().splitlines()]
+    prints = [json.loads(x) for x in (tmp_path / "prints.jsonl").read_text().splitlines()]
+    assert [q["tape_received_ns"] for q in quotes] == [10, 12, 13] and quotes[2]["bid"] is None
+    assert [(p["tape_received_ns"], p["price"], p["size"], p["aggressor"]) for p in prints] == [(11, 41, 1, "A"), (15, 31, 5, "N")]
+    assert series.count == dict(quotes=3, prints=2)
+    assert not any("mid" in k for q in quotes for k in q)

@@ -139,6 +139,63 @@ def figures(rows, lines):
     )
 
 
+def quote_line(message):
+    """One line of quotes.jsonl from a stepped message: the tape's own best bid and best ask, each as it is."""
+    raw = message["raw"]
+    line = dict(tape_received_ns=raw["ts_recv"], exchange_ns=raw["ts_event"],
+                reference=[message["source_sha256"], message["record_index"]],
+                bid=message["best_bid"], ask=message["best_ask"])
+    for key, name in (("best_bid_size", "bid_size"), ("best_ask_size", "ask_size")):
+        if key in message:  # only when the message carries them; this feed's does not
+            line[name] = message[key]
+    return line
+
+
+def print_line(message):
+    """One line of prints.jsonl from a stepped message that is a trade print."""
+    raw = message["raw"]
+    return dict(tape_received_ns=raw["ts_recv"], exchange_ns=raw["ts_event"],
+                reference=[message["source_sha256"], message["record_index"]],
+                price=raw["price"], size=raw["size"], aggressor=raw["side"])
+
+
+class MarketSeries:
+    """The market's own series for the stretch, written as the tape is stepped through, in tape time order.
+
+    quotes.jsonl: a line each time the best bid or best ask changes (and one for the first message of the stretch).
+    prints.jsonl: a line for every trade print. Kept for learning after the fact; the session never reads it.
+    """
+
+    def __init__(self, folder, begin_ns):
+        self.begin_ns = begin_ns
+        self.quotes = (Path(folder) / "quotes.jsonl").open("w", encoding="utf8", newline="\n")
+        self.prints = (Path(folder) / "prints.jsonl").open("w", encoding="utf8", newline="\n")
+        self.count = dict(quotes=0, prints=0)
+        self.standing = None
+        self.first = True
+
+    def add(self, message):
+        if message["period"] == "vendor snapshot":
+            return
+        line = quote_line(message)
+        standing = tuple(v for k, v in line.items() if k in ("bid", "ask", "bid_size", "ask_size"))
+        changed = standing != self.standing
+        self.standing = standing  # warm-up messages before the stretch are read too, not written
+        if line["tape_received_ns"] < self.begin_ns:
+            return
+        if changed or self.first:
+            self.quotes.write(json.dumps(line, separators=(",", ":")) + "\n")
+            self.count["quotes"] += 1
+        self.first = False
+        if message["raw"]["action"] == "T":
+            self.prints.write(json.dumps(print_line(message), separators=(",", ":")) + "\n")
+            self.count["prints"] += 1
+
+    def close(self):
+        self.quotes.close()
+        self.prints.close()
+
+
 def mailbox_used(folder):
     """The first q-* entry already in a decider's folder, or None. A used question folder would refuse its sequence."""
     folder = Path(folder)
@@ -164,9 +221,14 @@ def main():
     parser.add_argument("--decider-mbo-window-s", type=float,
                         help="seconds of raw MBO messages the decider's question carries (default: the dipole line's width)")
     parser.add_argument("--keep", type=Path, help="a folder to keep the journal, the receipt and the trade lines in")
+    parser.add_argument("--keep-market", action="store_true",
+                        help="with --keep: also keep the market's own quotes and prints for the stretch (quotes.jsonl, "
+                             "prints.jsonl); never given to a decider")
     args = parser.parse_args()
     if args.from_minute < 0 or args.minutes <= 0:
         parser.error("the stretch begins at or after the open and holds a positive number of minutes")
+    if args.keep_market and not args.keep:
+        parser.error("--keep-market needs --keep")
     if args.decider_timeout_s <= 0:
         parser.error("the decider's timeout is a positive number of seconds")
     if args.decider_mbo_window_s is not None and (args.decider_mbo_window_s <= 0 or not args.decider_mailbox):
@@ -197,6 +259,11 @@ def main():
                           decider=MailboxDecider(args.decider_mailbox, args.decider_timeout_s)
                           if args.decider_mailbox else None,
                           decider_mbo_window_s=args.decider_mbo_window_s)
+        series = None
+        if args.keep_market:
+            kept = args.keep.resolve() / session.run
+            kept.mkdir(parents=True)
+            series = MarketSeries(kept, begin)
         try:
             # Peek at each raw record's receive time, as the paced runner does, and admit it with step().
             for stored in session.feed.week:
@@ -206,7 +273,10 @@ def main():
                         break
                     if session.state != "active":
                         break
+                    before = session.last
                     session.step(session.cursor)
+                    if series is not None and session.last is not before:
+                        series.add(session.last)
                 else:
                     continue
                 break
@@ -215,12 +285,14 @@ def main():
                 session.advance_clock(expiry)
         finally:
             session.stop(STOP)
+            if series is not None:
+                series.close()
         rows = [json.loads(line) for line in (session.folder / "events.jsonl").read_text(encoding="utf8").splitlines()]
         lines = trade_lines(rows)
         kept = None
         if args.keep:
             kept = args.keep.resolve() / session.run
-            kept.mkdir(parents=True)
+            kept.mkdir(parents=True, exist_ok=args.keep_market)
             for name in ("events.jsonl", "receipt.json", "start.json"):
                 shutil.copyfile(session.folder / name, kept / name)
             if args.answers:
@@ -231,7 +303,8 @@ def main():
         print(json.dumps(dict(
             figures=figures(rows, lines), run=session.run, status=session.state, trade_day=args.trade_day.isoformat(),
             stretch_tape_ns=[begin, end], code_commit=session.revision, plan=str(args.plan), exit=plan.get("exit"),
-            messages=session.cursor + 1, kept=str(kept) if kept else None), separators=(",", ":")))
+            messages=session.cursor + 1, kept=str(kept) if kept else None,
+            **(dict(kept_market=series.count) if series is not None else {})), separators=(",", ":")))
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
