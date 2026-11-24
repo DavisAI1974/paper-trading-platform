@@ -40,7 +40,10 @@ class Checkpoints:
             git(self.root, "fetch", "--depth=1", "origin", ref)
             git(self.root, "switch", "-C", self.branch, "FETCH_HEAD")
         elif result.returncode == 2 and not existing:
-            git(self.root, "switch", "-c", self.branch)
+            # A new capture branch starts with no parent. Built on the checkout's commit, its first push
+            # would have to carry that whole commit once markets-data's branch had moved on, and the
+            # checkout holds none of those files.
+            git(self.root, "switch", "--orphan", self.branch)
         else:
             raise RuntimeError("cannot read the capture branch")
         self.folder.mkdir(parents=True, exist_ok=True)

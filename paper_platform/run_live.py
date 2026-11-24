@@ -12,7 +12,7 @@ import tempfile
 import threading
 import time
 
-from root.calendar import week_sunday
+from root.calendar import trade_day_bounds, week_sunday
 from .live_contract import bind_live_plan
 from .run import read_agent_plan
 from .run_clock import LIMIT_SECONDS, run_start_ns
@@ -63,6 +63,13 @@ def main():
     missing = [name for name in required if not os.environ.get(name)]
     if missing:
         parser.error("missing live paper settings: " + ", ".join(missing))
+    opens, halts = trade_day_bounds(args.trade_day)
+    now_ns = time.time_ns()
+    if now_ns >= halts or now_ns + int(LIMIT_SECONDS * 1_000_000_000) <= opens:
+        # A trade day this run never touches leaves the engine with nothing to decide for 5.75 hours.
+        from .run import notify
+        notify("the named trade day does not overlap this run", "preflight")
+        return 1
     plan, plan_source = read_agent_plan(os.environ["EXECUTION_PLAN"])
     common = ["--data", args.data, "--trade-day", args.trade_day]
     week = week_sunday(args.trade_day).isoformat()
@@ -83,7 +90,11 @@ def main():
                                               "--ready-file", ready, "--live-contract-file", contract_file,
                                               "--greg-go"], notices | {"DATABENTO_API_KEY"})
             while not contract_file.is_file():
-                if stopping.wait(0.1) or time.monotonic() >= deadline:
+                if stopping.wait(0.1):
+                    return 1
+                if time.monotonic() >= deadline:
+                    from .run import notify
+                    notify("no live NG contract definition before the stop", "preflight")
                     return 1
                 if recorder.poll() is not None or backup.poll() is not None:
                     raise RuntimeError("capture stopped before supplying the live NG contract definition")

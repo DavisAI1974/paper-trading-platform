@@ -324,7 +324,8 @@ def capture_preflight(feed, rules, deadline, *, minimum=4096, follow=True):
     actual = hashlib.sha256()
     with TemporaryDirectory() as tmp:
         short = Path(tmp) / "cut.sqlite"
-        with sqlite3.connect(short) as db:
+        # The read-only address of the attached capture is honoured only on a connection opened by address.
+        with sqlite3.connect(short.as_uri(), uri=True) as db:
             db.execute("ATTACH DATABASE ? AS original", (feed.path.as_uri() + "?mode=ro",))
             db.execute("CREATE TABLE source AS SELECT * FROM original.source")
             db.execute("CREATE TABLE connections AS SELECT * FROM original.connections")

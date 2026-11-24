@@ -145,7 +145,7 @@ def live(trade_day, profile, sink, contract_file=None):
             replays_remaining -= 1
             if replays_remaining != 0:
                 return
-            if contract:
+            if contract and contract.instrument_id is not None and not contract.path.exists():
                 contract.publish()
             with sink.writer.db:
                 sink.writer.db.execute("INSERT OR IGNORE INTO live_starts VALUES(?,?)",

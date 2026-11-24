@@ -41,6 +41,10 @@ jobs:
     steps:
       - name: Start the 5.75-hour run clock
         run: python3 -c 'import time; print(f"PAPER_RUN_STARTED_NS={time.monotonic_ns()}")' >> "$GITHUB_ENV"
+      - name: Require the markets-data deploy key
+        env:
+          KEY: ${{ secrets.MARKETS_DATA_DEPLOY_KEY }}
+        run: test -n "$KEY"
       - name: Read the selected platform commit
         shell: bash
         run: |
