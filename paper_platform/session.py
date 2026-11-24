@@ -260,6 +260,14 @@ class Session:
                       else "capture: " + evidence["status"])
             return self.stop(reason)
 
+    def stop_notice(self):
+        if not self.capture_end:
+            return self.state
+        last = self.capture_end.get("last_mbo_position")
+        recorded = "unknown" if last is None else str(last)
+        processed = "none" if self.cursor < 0 else str(self.cursor)
+        return f"{self.state}. Last recorded MBO {recorded}. Last processed {processed}."
+
     def last_source(self):
         if self.last is None:
             return None
