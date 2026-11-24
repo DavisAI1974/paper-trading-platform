@@ -93,6 +93,8 @@ def compare(live_folder, replay_folder):
         key for key in ("delivered", "first_live_decision_cursor", "last_source", "status", "capture_end")
         if live[key] != replay[key]
     ]
+    if live.get("timers_after_last_input_ns") != replay.get("timers_after_last_input_ns"):
+        window_differences.append("terminal strategy timers")
     if live["files"]["receive-ns.u64le"] != replay["files"]["receive-ns.u64le"]:
         window_differences.append("recorded receive times")
     live_frames = live.get("capture_frame_hashes_sha256")

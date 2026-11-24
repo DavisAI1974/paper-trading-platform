@@ -188,7 +188,8 @@ class CapturedFeed:
             count += 1
         if count != delivered:
             raise ValueError("checkpoint ended before the recorded endpoint")
-        yield {"recorded_stop": receipt["status"], "recorded_capture_end": receipt.get("capture_end")}
+        yield {"recorded_stop": receipt["status"], "recorded_capture_end": receipt.get("capture_end"),
+               "timers_after_input": receipt.get("timers_after_last_input_ns", [])}
 
     def messages(self, *, follow=False, poll=False, through_trade_day=False):
         uri = self.path.resolve().as_uri() + "?mode=ro"

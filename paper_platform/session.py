@@ -79,6 +79,7 @@ class Session:
         self.capture_end = None
         self.liquidation_available = True
         self.first_live_decision_cursor = None
+        self.timers_after_input = []
         self.captured = captured is not None
         if self.captured:
             self.capture_frame_hash = hashlib.sha256()
@@ -186,7 +187,7 @@ class Session:
             return "budget reached"
         return None
 
-    def _apply(self, decide, value):
+    def _apply(self, decide, value, *, timer=False):
         before = self.engine.begin_decision_batch()
         decisions = decide(value)
         needed = sum(1 + (e["action"] in ("open", "close", "exit")) for e in decisions)
@@ -198,6 +199,9 @@ class Session:
             self.engine.rollback_decision_batch(before)
             self.stop("budget reached")
             return False
+        if timer:
+            # The next source record may never be admitted if this timer stops the run.
+            self.timers_after_input.append(value)
         for decision in decisions:
             if self.execution and self.events >= self.output_budget:
                 self.stop("budget reached")
@@ -218,7 +222,7 @@ class Session:
                 self.stop(reason)
                 return
             try:
-                self._apply(self.engine.advance_clock, received_ns)
+                self._apply(self.engine.advance_clock, received_ns, timer=True)
             except Exception:
                 self.stop("failure")
                 raise
@@ -239,6 +243,12 @@ class Session:
                     self.stop("end of capture" if self.captured else "end of purchased input")
                     return None
                 if "recorded_stop" in message:
+                    for expiry in message["timers_after_input"]:
+                        if self.engine.next_expiry_ns != expiry:
+                            raise ValueError("recorded terminal timer differs from the next strategy expiry")
+                        self.advance_clock(expiry)
+                        if self.state != "active":
+                            return None
                     if message["recorded_capture_end"] is not None:
                         self.stop_capture(message["recorded_capture_end"])
                     else:
@@ -255,6 +265,7 @@ class Session:
                         self.advance_clock(expiry)
                         if self.state != "active":
                             return None
+                self.timers_after_input.clear()
                 self.cursor = message["cursor"]
                 self.last = message
                 if self.captured:
@@ -341,6 +352,7 @@ class Session:
                     capture_end=self.capture_end,
                 )
                 if self.captured:
+                    receipt["timers_after_last_input_ns"] = self.timers_after_input
                     receipt["capture_frame_hashes_sha256"] = self.capture_frame_hash.hexdigest()
                 (self.folder / "receipt.json").write_text(json.dumps(receipt, indent=2), encoding="utf8")
 
