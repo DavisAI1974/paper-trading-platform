@@ -139,7 +139,7 @@ class Runner:
             action = OPPOSITE[self.sides[tid]]
         at = ev["at"]
         intent = dict(role=role, strategy=ev["strategy"], trade_id=tid, action=action, quantity=bt.ORDER_QUANTITY,
-                      symbol=self.a.symbol, external_identifier=safe_id(f"{self.run_id}-{ev['strategy']}-{tid}-{role}"),
+                      symbol=self.a.symbol, external_identifier=safe_id(f"{self.run_id[:15]}-{tid}-{role[0]}"),
                       event_at=dict(place=at["place"], feed_time_ns=at["feed_time_ns"], sequence=at["sequence"],
                                     bid=at["bid"], offer=at["offer"]))
         self.counts["intents"] += 1
@@ -161,7 +161,7 @@ class Runner:
             self.trade_orders.setdefault(tid, []).append(dict(role=role, external_identifier=intent["external_identifier"],
                                                               sent=False, reason=why, outcome=None))
         st = self.trade.setdefault(tid, dict(open_confirmed=None, close_sent=False))
-        if self.stopping and self.stop_reason is not None:
+        if self.stopping:               # also when the run failed with no reason set (reviewer, 2026-11-24)
             return skip(f"run stopping ({self.stop_reason}): no opening or closing by rule; the flatten covers the account")
         if role == "close":
             if st["open_confirmed"] is not True:
@@ -204,14 +204,22 @@ class Runner:
         live = self.broker.pull("live")
         if pos is None or live is None:
             return "the start check could not read positions or live orders"
-        if bt.read_positions(pos) or (bt.dget(live, "data", "items") or []):
-            return "the account holds a position or a live order at the start: nothing sent"
+        if bt.read_positions(pos) or bt.working_orders(live):
+            return "the account holds a position or a working order at the start: nothing sent"
         return None
 
     def flatten(self):
         if getattr(self, "flatten_started", False):
             return                      # never a second flatten, whatever failed after the first
         self.flatten_started = True
+        # an order still working would fill AFTER the flatten and leave a position nobody sees: cancel each first
+        # (reviewer, 2026-11-24). Then the position is read fresh.
+        live = self.broker.pull("live")
+        for o in (bt.working_orders(live) if live is not None else []):
+            self.flatten_orders.append(dict(kind="cancel before the flatten", **o, answer=self.broker.cancel(o["order_id"])))
+        if live is None:
+            self.flatten_orders.append(dict(kind="cancel before the flatten", sent=False,
+                                            reason="live orders could not be read: none cancelled"))
         pos = self.broker.pull("positions")
         if pos is None:
             self.flatten_orders.append(dict(sent=False, reason="positions could not be read: not flattened"))
@@ -224,7 +232,7 @@ class Runner:
         elif net != 0:
             intent = dict(role="flatten", strategy=None, trade_id=None, action="Sell" if net > 0 else "Buy",
                           quantity=abs(net), symbol=self.a.symbol, note=bt.FLATTEN_NOTE,
-                          external_identifier=safe_id(f"{self.run_id}-flatten"), event_at=None)
+                          external_identifier=safe_id(f"{self.run_id[:15]}-flatten"), event_at=None)
             res = self.broker.send(intent, on_submit=self._count_submit)
             self.flatten_orders.append(dict(external_identifier=intent["external_identifier"], note=bt.FLATTEN_NOTE,
                                             action=intent["action"], quantity=intent["quantity"], **res))

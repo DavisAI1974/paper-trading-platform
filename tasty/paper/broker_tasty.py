@@ -407,6 +407,40 @@ def order_object(x):
     return d if isinstance(d, dict) and ("legs" in d or "status" in d or "id" in d) else (x if isinstance(x, dict) else {})
 
 
+def as_count(q):
+    """A quantity as a number. The sandbox sent quantities as numbers on 2026-11-23; a numeric string is read as
+    the same number, so that a change of type cannot make every fill and every position read as nothing
+    (reviewer, 2026-11-24). Anything else is None."""
+    if isinstance(q, bool):
+        return None
+    if isinstance(q, (int, float)):
+        return q
+    if isinstance(q, str):
+        try:
+            v = float(q)
+        except ValueError:
+            return None
+        return int(v) if v == int(v) else v
+    return None
+
+
+def working_orders(live_response):
+    """The orders of an /orders/live response that are still WORKING: not terminal by their status AND not fully
+    filled by their fills. That list also holds the day's filled and cancelled orders, and an order can stay
+    'Live' or 'Cancel Requested' with its fill recorded (order 2207911), so neither the list nor a status alone
+    says an order is working."""
+    out = []
+    for it in (dget(live_response, "data", "items") or []):
+        if str(it.get("status")).lower() in TERMINAL:
+            continue
+        asked = sum(as_count(leg.get("quantity")) or 0 for leg in (it.get("legs") or []))
+        filled = sum(as_count(f.get("quantity")) or 0 for leg in (it.get("legs") or []) for f in (leg.get("fills") or []))
+        if filled < asked or asked == 0:
+            out.append({"order_id": it.get("id"), "status_as_said": it.get("status"), "asked": asked, "filled": filled,
+                        "external_identifier": it.get("external-identifier")})
+    return out
+
+
 def read_fills(x):
     """Every fill of an order, from its legs' own `fills` lists, as the sandbox said them (strings kept)."""
     out = []
@@ -423,7 +457,7 @@ def read_outcome(x, ordered_quantity=ORDER_QUANTITY):
     status stayed 'Live' with a recorded fill is a filled order."""
     o = order_object(x)
     fills = read_fills(x)
-    filled = sum(f["quantity"] for f in fills if isinstance(f["quantity"], (int, float)))
+    filled = sum(as_count(f["quantity"]) or 0 for f in fills)
     return {"order_id": o.get("id"), "status_as_said": o.get("status"), "external_identifier": o.get("external-identifier"),
             "fills": fills, "filled_quantity": filled, "confirmed": filled >= ordered_quantity}
 
@@ -435,7 +469,8 @@ def read_positions(x):
     for it in (dget(x, "data", "items") or []):
         q = it.get("quantity")
         d = it.get("quantity-direction")
-        signed = (-q if d == "Short" else q) if isinstance(q, (int, float)) and d in ("Long", "Short") else None
+        n = as_count(q)
+        signed = (-n if d == "Short" else n) if n is not None and d in ("Long", "Short") else None
         out.append({"symbol": it.get("symbol"), "quantity": q, "direction": d, "signed_quantity": signed,
                     "average_open_price": it.get("average-open-price"), "instrument_type": it.get("instrument-type")})
     return out
@@ -475,6 +510,11 @@ class Broker:
         """Read-only records: 'positions', 'live' (orders/live)."""
         path = {"positions": f"/accounts/{self.account}/positions", "live": f"/accounts/{self.account}/orders/live"}[what]
         return try_call(self.ctx, "GET", path)
+
+    def cancel(self, oid):
+        """Ask the sandbox to cancel one order (the 7e check did the same, its line 452). The answer is recorded;
+        what became of the order is read afterwards from positions and fills, never from this answer."""
+        return try_call(self.ctx, "DELETE", f"/accounts/{self.account}/orders/{oid}")
 
     def send(self, intent, on_submit=lambda: None):
         """intent: dict(role, action 'Buy'/'Sell', quantity, external_identifier, ... shown beside it, never read).
@@ -527,6 +567,11 @@ class Broker:
                 lookup, order_obj = check_uncertain_submit(ctx, acct, ext, LOOKUP_MAX_PAGES)
             except (StepStop, Uncertain) as e2:
                 lookup = {"look-up": f"could not run: {scrub(str(e2))}"}
+        except StepStop as e:
+            # the sandbox answered the submit with a refusal (4xx, 3xx): the order was not taken. Written as an
+            # outcome so the ledger shows it; nothing is re-sent (reviewer, 2026-11-24).
+            rec.note(f"submit refused: {e}; NOT resubmitting")
+            lookup = {"submit": f"refused: {scrub(str(e))}"}
         if oid is None and order_obj is not None:
             oid = order_obj.get("id")
         outcome = read_outcome(order_obj) if order_obj else {"order_id": oid, "status_as_said": None, "fills": [],

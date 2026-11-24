@@ -113,3 +113,22 @@ def test_halt_hour_refuses_by_the_wall_clock():
     # 2026-11-23 22:30:00 UTC is 5:30 pm Eastern; 21:30:00 UTC is 4:30 pm
     assert bt.in_halt_hour(1795473000 * 10**9) is True
     assert bt.in_halt_hour(1795469400 * 10**9) is False
+
+
+def test_working_orders_on_the_real_live_lists():
+    """The real /orders/live answers of 2026-11-23 list the day's filled and cancelled orders, and order 2207911
+    as 'Cancel Requested' with its fill recorded. None of them is a working order."""
+    import json
+    seen = 0
+    for name in ('sandbox-order-20261123T230217484820112Z.jsonl', 'sandbox-order-20261123T232512063886931Z.jsonl'):
+        path = RECORDINGS / name
+        if not path.exists():
+            pytest.skip(f'the real order record is not here: {path}')
+        for line in open(path, encoding='utf-8'):
+            o = json.loads(line)
+            if o.get('kind') == 'response' and o['path'].endswith('/orders/live'):
+                items = bt.dget(o['body'], 'data', 'items') or []
+                assert items, 'the recorded live list is empty: the check would prove nothing'
+                assert bt.working_orders(o['body']) == []
+                seen += 1
+    assert seen == 2
