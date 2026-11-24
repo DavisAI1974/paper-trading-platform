@@ -19,9 +19,11 @@ answer is applied is set by the session, on the tape's own time.
 
 import json
 import os
+import time
+from pathlib import Path
 
-ACTIONS = ("rule_off", "rule_on", "close")
-KEYS = {"id", "action", "rule", "trade_id", "by", "packet", "asked_at_sequence", "not_before_tape_ns"}
+ACTIONS = ("rule_off", "rule_on", "close", "take", "skip")
+KEYS = {"id", "action", "rule", "trade_id", "by", "packet", "asked_at_sequence", "not_before_tape_ns", "why"}
 
 
 def _text(value):
@@ -40,13 +42,19 @@ def validate(answer):
         return answer["_malformed"]
     if answer.keys() - KEYS:
         return "unknown field: " + ", ".join(sorted(answer.keys() - KEYS))
-    if not _text(answer.get("id")):
+    decision = answer.get("action") in ("take", "skip")
+    if not decision and not _text(answer.get("id")):
         return "id is missing or empty"
+    if decision and "id" in answer and not _text(answer["id"]):
+        return "id is empty"
     if answer.get("action") not in ACTIONS:
         return "action is not one of " + ", ".join(ACTIONS)
     if not _text(answer.get("by")):
         return "by is missing or empty"
-    if answer["action"] == "close":
+    if decision:
+        if not _whole(answer.get("asked_at_sequence")):
+            return answer["action"] + " names the signal it answers in asked_at_sequence"
+    elif answer["action"] == "close":
         if not _text(answer.get("trade_id")):
             return "a close names its trade_id"
         if "rule" in answer and not _text(answer["rule"]):
@@ -58,9 +66,72 @@ def validate(answer):
         return "packet is null or {sha256, tokens}"
     if answer.get("asked_at_sequence") is not None and not _whole(answer["asked_at_sequence"]):
         return "asked_at_sequence is null or a whole number"
+    if "why" in answer and not isinstance(answer["why"], str):
+        return "why is one sentence of text"
     if "not_before_tape_ns" in answer and not _whole(answer["not_before_tape_ns"]):
         return "not_before_tape_ns is a whole number of nanoseconds"
     return None
+
+
+def validate_decision(answer, sequence):
+    """The reason a decider's answer to the question about signal `sequence` is not a take or a skip, or None."""
+    if not isinstance(answer, dict):
+        return "the decider returned something that is not one answer"
+    if answer.get("action") == "none":
+        return answer.get("reason") if isinstance(answer.get("reason"), str) else "the decider gave no answer"
+    reason = validate(answer)
+    if reason is not None:
+        return "malformed: " + reason
+    if answer["action"] not in ("take", "skip"):
+        return "a decider answers take or skip"
+    if answer["asked_at_sequence"] != sequence:
+        return f"the answer names signal {answer['asked_at_sequence']}, the question was about {sequence}"
+    return None
+
+
+def no_answer(sequence, reason):
+    return {"action": "none", "asked_at_sequence": sequence, "by": "mailbox", "reason": reason}
+
+
+class MailboxDecider:
+    """A decider through a folder. The other side reads the question and writes the answer.
+
+    `ask(question)` writes `<folder>/q-<sequence>/question.json` (the question, which names the path of the run's
+    journal file so the other side can read the run's own rows up to that sequence), then waits for
+    `<folder>/q-<sequence>/answer.json`, checks it and returns it. After `timeout_s` it returns a "none" answer
+    with the reason. It builds no packet and no brief.
+    """
+
+    def __init__(self, folder, timeout_s, poll_s=0.5, *, clock=time.monotonic, sleep=time.sleep):
+        self.folder = Path(folder)
+        self.timeout_s = timeout_s
+        self.poll_s = poll_s
+        self.clock = clock
+        self.sleep = sleep
+
+    def ask(self, question):
+        sequence = question["sequence"]
+        box = self.folder / f"q-{sequence}"
+        box.mkdir(parents=True, exist_ok=False)
+        temporary = box / "question.json.part"
+        temporary.write_text(json.dumps(question, sort_keys=True, indent=2), encoding="utf8")
+        os.replace(temporary, box / "question.json")
+        answer_file = box / "answer.json"
+        deadline = self.clock() + self.timeout_s
+        unreadable = None
+        while True:
+            if answer_file.exists():
+                try:
+                    answer = json.loads(answer_file.read_text(encoding="utf8"))
+                except (ValueError, OSError) as error:
+                    unreadable = f"answer.json is not readable: {type(error).__name__}"  # maybe half written
+                else:
+                    reason = validate_decision(answer, sequence)
+                    return answer if reason is None else dict(
+                        no_answer(sequence, reason), received=answer if isinstance(answer, dict) else None)
+            if self.clock() >= deadline:
+                return no_answer(sequence, unreadable or f"no answer within {self.timeout_s} seconds")
+            self.sleep(self.poll_s)
 
 
 class NoAnswers:

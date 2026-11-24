@@ -19,6 +19,11 @@ first step whose message is at or after that time, in the order of the file, and
 row of kind `answer`. `--answer-close` allows a `close` answer to close a trade; without it a close answer is
 journaled and not applied. Without `--answers` nothing here changes.
 
+With `--decider-mailbox <folder>` (and `--decider-timeout-s N`, default 600) a decider is asked at each opening
+signal of a rule the plan trades: the session journals a `question` row, writes `<folder>/q-<sequence>/question.json`,
+waits for `answer.json` beside it, and sends the opening order only on a `take`. A `skip`, a timeout or a bad answer
+sends none. The wall time of the wait is recorded and is not added to any tape time. The paced run has no such gate.
+
 It writes into a scratch copy and nowhere else: the journal, the receipt and one line for each trade
 (`trades.jsonl`) are kept only when `--keep` names a folder. No network, no order to any venue, no notice.
 
@@ -39,7 +44,7 @@ import tempfile
 
 from root.calendar import clock_days_needed, trade_day_bounds
 
-from .answers import TimedAnswers
+from .answers import MailboxDecider, TimedAnswers
 from .market import replay_market
 from .session import Session
 
@@ -148,12 +153,17 @@ def main():
                         help="a file of answers written before the trial, each with not_before_tape_ns")
     parser.add_argument("--answer-close", action="store_true",
                         help="let a close answer close a trade (the hold rule in force is the give-back exit)")
+    parser.add_argument("--decider-mailbox", type=Path,
+                        help="a folder through which a decider answers take or skip at each opening signal")
+    parser.add_argument("--decider-timeout-s", type=float, default=600)
     parser.add_argument("--keep", type=Path, help="a folder to keep the journal, the receipt and the trade lines in")
     args = parser.parse_args()
     if args.from_minute < 0 or args.minutes <= 0:
         parser.error("the stretch begins at or after the open and holds a positive number of minutes")
     if args.answer_close and not args.answers:
         parser.error("--answer-close needs --answers")
+    if args.decider_timeout_s <= 0:
+        parser.error("the decider's timeout is a positive number of seconds")
     if args.answers:
         refusal = TimedAnswers.check(args.answers)
         if refusal:
@@ -173,7 +183,9 @@ def main():
                           market_key=args.market, execution_plan=plan, plan_source=str(args.plan),
                           paced_from_ns=begin if args.from_minute else None,
                           answers=TimedAnswers(args.answers) if args.answers else None,
-                          answer_close=args.answer_close)
+                          answer_close=args.answer_close,
+                          decider=MailboxDecider(args.decider_mailbox, args.decider_timeout_s)
+                          if args.decider_mailbox else None)
         try:
             # Peek at each raw record's receive time, as the paced runner does, and admit it with step().
             for stored in session.feed.week:

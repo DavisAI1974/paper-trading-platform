@@ -76,3 +76,31 @@ def test_a_trial_file_without_a_time_is_refused(tmp_path):
     assert "not_before_tape_ns" in TimedAnswers.check(path)
     path.write_text(line(id="a1", not_before_tape_ns=1))
     assert TimedAnswers.check(path) is None
+
+
+def question(sequence=7):
+    return dict(sequence=sequence, rule="CL01", side="buy", trade_id="t", tape_received_ns=1, journal="/x/events.jsonl")
+
+
+def test_mailbox_writes_a_question_and_picks_up_the_answer(tmp_path):
+    from paper_platform.answers import MailboxDecider
+    answered = dict(action="take", asked_at_sequence=7, by="agent:1", packet=None, why="the flow agrees")
+
+    def sleep(_):  # the other side answers while the session waits
+        (tmp_path / "q-7" / "answer.json").write_text(json.dumps(answered))
+
+    got = MailboxDecider(tmp_path, 5, 0, sleep=sleep).ask(question())
+    asked = json.loads((tmp_path / "q-7" / "question.json").read_text())
+    assert asked == question() and got == answered
+
+
+def test_mailbox_times_out_with_none_and_refuses_a_wrong_answer(tmp_path):
+    from paper_platform.answers import MailboxDecider
+    now = iter(range(100))
+    got = MailboxDecider(tmp_path, 3, 0, clock=lambda: next(now), sleep=lambda _: None).ask(question(8))
+    assert got["action"] == "none" and "no answer" in got["reason"]
+    def sleep(_):
+        (tmp_path / "q-10" / "answer.json").write_text(json.dumps(dict(action="take", asked_at_sequence=3, by="a")))
+
+    got = MailboxDecider(tmp_path, 5, 0, sleep=sleep).ask(question(10))
+    assert got["action"] == "none" and "question was about 10" in got["reason"]

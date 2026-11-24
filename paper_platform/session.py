@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from crypto_ng.tick import NS
 
-from .answers import validate
+from .answers import validate, validate_decision
 from .causal_gate import PreflightDeadline, check_prefix
 from .engine import Engine
 from .feed import HistoricalFeed
@@ -36,8 +36,12 @@ class Session:
         self, data_root, trade_day, *, message_budget, output_budget, market_key="nymex-ng", on_event=None,
         started=None, execution_plan=None, captured=None, plan_source=None, capture_connection=None,
         replay_capture=False, capture_commit=None, replay_receipt=None, paced_from_ns=None,
-        answers=None, answer_close=False,
+        answers=None, answer_close=False, decider=None,
     ):
+        # A decider (answers.py) is asked at each opening signal of a rule the plan trades; None = no gate.
+        self.decider = decider
+        self.decided = dict(asked=0, take=0, skip=0, none=0)
+        self.decider_hash = hashlib.sha256()
         # Answers from outside (see answers.py): with none plugged in (answers=None) nothing below runs.
         self.answers = answers
         self.answer_close = answer_close
@@ -173,8 +177,8 @@ class Session:
                 paced_from_tape_ns=paced_from_ns,
             ),
         )
-        if answers is not None:
-            self.initial["answers"] = dict(on=True, answer_close=answer_close)
+        if answers is not None or decider is not None:
+            self.initial["answers"] = dict(on=True, answer_close=answer_close, decider=decider is not None)
         (self.folder / "start.json").write_text(json.dumps(self.initial, indent=2), encoding="utf8")
         self.write("status", reason="started")
 
@@ -209,6 +213,10 @@ class Session:
         if self.answers_off and e["action"] == "open" and e["rule"] in self.answers_off:
             # An answer switched this rule's orders off: the signal is journaled above and sends no order.
             self.answers_unordered.add(e["trade_id"])
+        elif self.decider is not None and e["action"] == "open" and self._orders_for(e["rule"]):
+            # The gate: the signal is journaled above; its order goes only on a take.
+            if not self._ask_decider(signal, e):
+                self.answers_unordered.add(e["trade_id"])
         if self.execution is None:
             if e["trade_id"] in self.answers_unordered:
                 return
@@ -218,6 +226,8 @@ class Session:
         for instruction in self.execution.instructions(dict(e, signal_sequence=sequence)):
             if self.answers_off and instruction["action"] == "open" and (
                     instruction["rule"] in self.answers_off or instruction.get("entry_rule") in self.answers_off):
+                continue
+            if self.decider is not None and instruction["action"] == "open" and e["trade_id"] in self.answers_unordered:
                 continue
             # Only the event budget cuts a decision's orders short. The clock is checked once the decision
             # is whole, so a live run and its replay send the same orders for the same message.
@@ -379,6 +389,40 @@ class Session:
             if reason is None:
                 self._apply_answer(answer)
 
+    def _ask_decider(self, signal, e):
+        """Journal the question, block on the decider, journal its answer. True only on a take."""
+        sequence = signal["sequence"]
+        question = dict(sequence=sequence, rule=e["rule"], side=e.get("side"), trade_id=e["trade_id"],
+                        tape_received_ns=e.get("received"), journal=str(self.folder / "events.jsonl"))
+        self.write("question", signal_sequence=sequence, rule=e["rule"], side=e.get("side"),
+                   trade_id=e["trade_id"], received=e.get("received"))
+        self.decided["asked"] += 1
+        started = time.monotonic_ns()
+        try:
+            given = self.decider.ask(question)
+            failure = None
+        except Exception as error:
+            given, failure = None, f"the decider raised {type(error).__name__}"
+        latency = time.monotonic_ns() - started  # wall time, recorded only; never added to a tape time
+        if failure is None:
+            failure = validate_decision(given, sequence)
+        if failure is not None:
+            action = "none"
+            fields = dict(answer=given if isinstance(given, dict) else None, reason=failure)
+            if isinstance(given, dict) and given.get("action") == "none" and isinstance(given.get("reason"), str):
+                fields["reason"] = given["reason"]
+            for key in ("by", "packet", "why"):
+                if isinstance(given, dict) and key in given:
+                    fields[key] = given[key]
+        else:
+            action = given["action"]
+            fields = dict(answer=given, **{k: given.get(k) for k in ("by", "packet", "why")})
+        self.decided[action] += 1
+        self.decider_hash.update(json.dumps(given, sort_keys=True, separators=(",", ":"), default=str).encode() + b"\n")
+        self.write("answer", action=action, asked_at_sequence=sequence, applied=action in ("take", "skip"),
+                   latency_ns=latency, tape_received_ns=e.get("received"), **fields)
+        return action == "take"
+
     def _orders_for(self, rule):
         if self.execution is None:
             return True
@@ -391,6 +435,8 @@ class Session:
             return "malformed: " + reason
         if answer["id"] in self.answers_seen:
             return "an answer with this id was already taken"
+        if answer["action"] in ("take", "skip"):
+            return "take and skip answer a question put to the decider; they are not taken from a file"
         if answer["action"] == "close":
             idea = self.engine.open.get(answer["trade_id"])
             if idea is None:
@@ -422,11 +468,15 @@ class Session:
             self.record(dict(event, answer_id=answer["id"]))
 
     def answers_receipt(self):
-        if self.answers is None:
+        if self.answers is None and self.decider is None:
             return {"on": False}
-        return dict(on=True, answer_close=self.answer_close, taken=self.answers_taken,
-                    applied=self.answers_applied, not_applied=self.answers_taken - self.answers_applied,
-                    waiting_at_stop=self.answers.waiting(), sha256=self.answers_hash.hexdigest(),
+        return dict(on=True, source=self.answers is not None, answer_close=self.answer_close,
+                    taken=self.answers_taken, applied=self.answers_applied,
+                    not_applied=self.answers_taken - self.answers_applied,
+                    waiting_at_stop=self.answers.waiting() if self.answers is not None else 0,
+                    sha256=self.answers_hash.hexdigest(),
+                    decider=dict(on=self.decider is not None, **self.decided,
+                                 sha256=self.decider_hash.hexdigest()),
                     causal_check_covers="the rules' decisions without answers")
 
     def stop_capture(self, evidence):
