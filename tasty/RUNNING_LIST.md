@@ -183,6 +183,10 @@ line here is a result.
     No graph exists yet (markets-data has no `graph/` folder). Handoff W was written as prose, like the ones
     before it.
 
+26. 2026-11-24, Greg. NO MORE PAPER TRADING UNTIL THE AGENT PROGRAM IS BUILT: "We need to finish building everything
+    for the agents before we do any more paper trading". The steps are stages 2 to 6, 7d, 7f and 8 of the graph
+    adoption plan; the next session is to finish all of them. Handoff: DATA `NEXT_SESSION_HANDOFF_20261124X.md`.
+
 ## D. Runs
 
 1. 2026-11-23 evening (trade day Tue Nov 24, 2026), 8:05 pm to 8:12 pm Eastern. THE FIRST RUN WITH ORDERS, on Greg's
