@@ -173,6 +173,9 @@ line here is a result.
     of the build). Nothing in the runner draws or links anything yet. To be built, on his word for which he means:
     a picture for each paper trade (the prints, both quotes and the two lines from its open to its close), and/or
     the links from each ledger line to its rule version and the finding the rule rests on.
+    DONE (the links), 2026-11-24: each intended order and each fill of the three run folders is a line of the
+    knowledge graph, each fill tied to its order, each order to its rule version, each rule version to the run's code
+    (Markets `tools/kgraph/ingest_paper.py`; DATA `graph/`). The picture for each paper trade is NOT built.
 
 25. 2026-11-24, Greg: "I thought the new agent program was supposed to convert the handoffs into graphs so theere
     isn't so much to read?" IT IS SUPPOSED TO, AND THAT PART IS NOT BUILT. In the graph adoption plan (Markets
@@ -182,10 +185,36 @@ line here is a result.
     agents) and stage 7 (paper trading) have been started; stages 2 to 6 and 8 are filed, waiting on his word.
     No graph exists yet (markets-data has no `graph/` folder). Handoff W was written as prose, like the ones
     before it.
+    DONE, 2026-11-24: the handoffs are read into claims tied to their file and line (9 documents so far, 1,147
+    claims; 97 documents not read yet, each with a line saying so) and a session starts from the graph:
+    `python3 -m tools.kgraph.context --budget 6000` in a Markets checkout (manual: `tools/README_AGENT_PROGRAM.md`).
 
 26. 2026-11-24, Greg. NO MORE PAPER TRADING UNTIL THE AGENT PROGRAM IS BUILT: "We need to finish building everything
     for the agents before we do any more paper trading". The steps are stages 2 to 6, 7d, 7f and 8 of the graph
     adoption plan; the next session is to finish all of them. Handoff: DATA `NEXT_SESSION_HANDOFF_20261124X.md`.
+    BUILT, 2026-11-24 (twenty-first session): stages 2, 3, 4a, 4b, 4c, 5a, 5b, 6, 7d, 7f and 8 are built as code with
+    checks on real records. Not run, each waiting for his go: the swarm, the token test, a loop, the switch of
+    Frankie's input. Whether paper trading resumes is his to say.
+
+27. 2026-11-24, Claude. THE LIST AND THE RECEIPT DISAGREE ON THE CODE OF THE FIRST RUN WITH ORDERS. D1 below says
+    "code `ef58c85`"; that run's own `receipt.json` says `code_commit` `74b1f22`. Found when the run was loaded
+    into the graph, which uses the receipt's. D1 is left as it was written.
+
+28. 2026-11-24, Greg. NO NEW CLAIM IS TIED TO A TASTY PLATFORM ISSUE: "Make sure any nee claims aren't tied to tasty
+    platdorm issues". In the graph, every order and fill of a sandbox run, every claim read from a line this list
+    parks (C22, section B, C7) and every claim a reader marks as being about the sandbox or its thin feed is
+    marked; nothing new may rest on a marked thing, and none is taken as evidence. His own decisions are never
+    marked. Markets `tools/kgraph/platform_scope.py`.
+
+29. 2026-11-24, Greg. NOTHING GETS REPLACED: "nothing gets replaced ... stuff that doesn't work just gets scored so
+    it doesn't get called". For the rules: a rule that does not hold up is not removed or overwritten; each
+    version stays as its own entry of the experiment record with what was found about it, and what is found
+    decides whether it is called. No rule is scored yet: nothing from this feed is scored.
+
+30. 2026-11-24, Claude. NO RULE OF THE 32 IS TIED TO A FINDING. The grounding check was run on every rule version
+    of the two runs that carry a code commit (30 of them): none rests on any claim of the graph. For the rewrite:
+    each rule is to name the finding it was written from, and that finding may not be a sandbox or thin-feed
+    issue (28). Record: DATA `graph/nodes/Evaluation.jsonl`.
 
 ## D. Runs
 
