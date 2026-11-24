@@ -147,13 +147,21 @@ def live(trade_day, profile, sink):
             if isinstance(sink.error, CaptureFailure):
                 raise sink.error
             raise CaptureFailure("live DBN write failed") from sink.error
+    except CaptureFailure as error:
+        sink.failed(error)
+        raise
     finally:
         if connected:
             try:
                 if client.is_connected():
                     client.stop()
             finally:
-                client.block_for_close(timeout=10)
+                try:
+                    client.block_for_close(timeout=10)
+                except Exception as error:
+                    if isinstance(sink.error, CaptureFailure):
+                        raise sink.error from error
+                    raise CaptureFailure("live feed closed with an error") from error
 
 
 def main():
@@ -185,6 +193,7 @@ def main():
             sink = Sink(writer, args.message_budget, started)
             for sig in (signal.SIGTERM, signal.SIGINT):
                 signal.signal(sig, lambda *_: sink.stop("capture stopped"))
+            signal.signal(signal.SIGUSR1, lambda *_: sink.failed(CaptureFailure("capture checkpoint publication failed")))
             if args.ready_file:
                 pending = args.ready_file.with_suffix(".pending")
                 pending.write_text(str(writer.connection_id), encoding="ascii")
