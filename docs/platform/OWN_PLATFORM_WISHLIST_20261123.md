@@ -130,6 +130,10 @@
 
   **Providers approved.** Greg selected Render for the HTML/htmx dashboard and Pushover for notices. The repository has the two Pushover secret names configured. Render connection settings and receipt of a phone notice remain open.
 
+  **Ccode, November 24. Remaining wiring built in draft, not run.** The runner already sends the notice for a budget stop, a run stop and a failure it can see. [Notice sender](../../paper_platform/run.py) Ccode added a workflow that sends a notice when one of the four manual workflows ends in any way other than success. It covers what the runner cannot report: a step that fails before the runner starts, a cancelled or timed-out job and a lost runner. [Run-end notice](../../.github/workflows/run_end_notice.yml) GitHub starts it only from the default branch, so it takes effect after merge. When the runner has also reported a failure, Greg receives both notices. Agent runs send theirs through the same sender (item 23).
+
+  **Settings only Greg can supply.** On Render, service `ng-paper-viewer`: `PAPER_VIEW_PASSWORD` and `PAPER_RELAY_TOKEN`. In GitHub Actions: the variable `PAPER_RELAY_URL` with the Render service's HTTPS address, and the secret `PAPER_RELAY_TOKEN` with the same value as on Render. Ccode read, set and sent no value. Receipt of a notice on the phone has not been exercised and waits for Greg's permission.
+
 - [ ] **27.** Per strategy, a plain list of its trades: time in, time out, both quotes at each end, why it opened, why it closed. No summary number until Greg sets one. SUGGESTED
 
   **Built in draft.** Each strategy row shows the first entry fill and the close fill that returns that trade to zero contracts, with Eastern tape time, both observed MBO quotes and the reason from the corresponding order. Partial exits leave the trade open. Signal-only trades show decision times and quotes. Individual fills, administrative closes and unsubmitted instructions remain visible. Older fills without recorded quotes show those quotes as unavailable. Review and merge are pending.

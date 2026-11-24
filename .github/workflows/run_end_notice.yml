@@ -1,0 +1,29 @@
+name: Phone notice for a run that ended without success
+on:
+  workflow_run:
+    workflows:
+      - Live NG MBO paper session
+      - Purchased NG MBO paper replay
+      - Record NG MBO and persist checkpoints
+      - Budgeted agent run
+    types: [completed]
+permissions: {}
+jobs:
+  notice:
+    # A run whose only job was skipped never started, so it has nothing to report.
+    if: ${{ github.event.workflow_run.conclusion != 'success' && github.event.workflow_run.conclusion != 'skipped' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send the notice
+        env:
+          PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
+          PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
+          WORKFLOW: ${{ github.event.workflow_run.name }}
+          RUN_NUMBER: ${{ github.event.workflow_run.run_number }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: |
+          curl --fail --silent --show-error --max-time 5 \
+            --form-string "token=$PUSHOVER_APP_TOKEN" \
+            --form-string "user=$PUSHOVER_USER_KEY" \
+            --form-string "message=NG Actions run $WORKFLOW #$RUN_NUMBER ended: $CONCLUSION" \
+            https://api.pushover.net/1/messages.json > /dev/null
