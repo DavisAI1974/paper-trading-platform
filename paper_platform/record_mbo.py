@@ -63,10 +63,11 @@ class Sink:
     def write(self, data, *, snapshot=False):
         received_ns = time.time_ns()
         self.last_delivery_at = time.monotonic()
-        if self.last_delivery_at >= self.deadline:
-            self.stop("clock limit")
         if self.done.is_set():
             return len(data)
+        if self.last_delivery_at >= self.deadline:
+            # The delivery that crosses the clock limit has arrived, so it is stored before the stop.
+            self.stop("clock limit")
         if data.startswith(b"DBN"):
             kind = "metadata"
         else:

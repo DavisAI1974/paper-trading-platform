@@ -65,7 +65,7 @@ class Checkpoints:
             # Publish only the complete database. Never replace a live recorder.
             os.link(restored, self.database)
 
-    def publish(self):
+    def publish(self, push_seconds=None):
         remote = git(self.root, "remote", "get-url", "--push", "--all", "origin").lower().removesuffix(".git")
         if remote != "git@github.com:davisai1974/markets-data":
             raise ValueError("capture backups require the markets-data deploy key")
@@ -101,7 +101,8 @@ class Checkpoints:
             git(self.root, "-c", "user.name=NG capture", "-c", "user.email=paper@users.noreply.github.com",
                 "commit", "-qm", "Checkpoint captured MBO deliveries")
         # A prior push may have failed after the local commit succeeded.
-        git(self.root, "push", "origin", "HEAD:refs/heads/" + self.branch)
+        subprocess.run(["git", "-C", str(self.root), "push", "origin", "HEAD:refs/heads/" + self.branch],
+                       check=True, timeout=push_seconds)
 
 
 def main():
@@ -124,7 +125,9 @@ def main():
     else:
         while True:
             time.sleep(60)
-            store.publish()
+            # A push that hangs would leave the recorder running with no new checkpoint and no word of it.
+            # Under the limit it ends this process, and the recorder is told the publication failed.
+            store.publish(push_seconds=55)
 
 
 if __name__ == "__main__":
