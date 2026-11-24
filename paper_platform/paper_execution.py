@@ -98,7 +98,7 @@ class RuleVenue:
         key, action = event["trade_id"], event["action"]
         self.reference, self.received = event["reference"], event["received"]
         self.known_received_ns = event.get("known_received_ns", self.received)
-        self.clock.set_time(self.received)
+        self.clock.set_time(self.known_received_ns)
         if action != "open":
             cancellation_error = None
             working = sorted(self.active_orders.get(key, ()))
@@ -130,7 +130,7 @@ class RuleVenue:
             side = OrderSide.BUY if event["side"] == "buy" else OrderSide.SELL
         kwargs = dict(trader_id=self.trader, strategy_id=self.strategy, instrument_id=self.instrument.id,
                       client_order_id=ClientOrderId(order_id), order_side=side, quantity=Quantity.from_int(quantity),
-                      ts_init=self.received, init_id=UUID4())
+                      ts_init=self.known_received_ns, init_id=UUID4())
         limit = None
         if style in ("post", "cross_limit"):
             buy = side == OrderSide.BUY
@@ -157,10 +157,10 @@ class RuleVenue:
         self.active_orders[key].add(order_id)
         self.emit("paper order", **event, order_id=order_id, pricing="native L3",
                   order_side="buy" if side == OrderSide.BUY else "sell", quantity=quantity,
-                  placement=style, limit_price=limit, fill_price=None)
+                  placement=style, limit_price=limit, submitted_ns=self.known_received_ns, fill_price=None)
         self.cache.add_order(order)
         order.apply(OrderSubmitted(self.trader, self.strategy, self.instrument.id, order.client_order_id,
-                                   self.account, UUID4(), self.received, self.received))
+                                   self.account, UUID4(), self.known_received_ns, self.known_received_ns))
         self.cache.update_order(order)
         self.engine.process_order(order, self.account)
         if event.get("administrative_flatten") and self.inventory[key]:

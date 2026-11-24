@@ -98,6 +98,8 @@
 
 - [ ] **17.** How a paper fill is priced: OPEN, Greg's word. Until then each paper trade carries both quotes (bid and ask) at its entry and its exit, and no result figure.
 
+  **Built in draft.** Delayed decisions keep the earlier research quote and source reference. Native submission, cancellation and the venue clock use the time the decision became knowable. Each submitted paper order journals that timestamp. The agents’ prices, offsets and sizes remain as committed. Native-fill evidence awaits an authorized run.
+
   **Greg decided the execution behavior.** Paper orders can post a bid or offer, lift an offer or hit a bid. Frankie and the agents choose placement and size for each strategy. PR 5 implements native L3 queue tracking, liquidity consumption and partial-fill records. The two family agents have supplied their execution plan. Operational evidence is pending.
 
   **Earlier Ccode handoff, November 24.** The contract definition and the Databento instrument ID (150611, NGX3) for the purchased archive are recorded with their sources. [Contract record](../../paper_platform/execution_plans/NG_OCT2023_CONTRACT.md) Two decider agents, one for each rule family, were briefed to choose placement and size from each rule's own words, with "no decision" allowed. Both were stopped at the session change before they recorded a choice in that pass. The [item 17 handoff on Ccode's markets-data branch](https://github.com/DavisAI1974/markets-data/blob/ccr-349e2ffe-07p8od/tasks/family-research-20261022/research-union-current/paper-trading-20261123/item17-20261124/README.md) now includes the family briefs, both authors' rule text and open questions, the plan format and the NGX3 contract record. Each family brief names its answer file.
