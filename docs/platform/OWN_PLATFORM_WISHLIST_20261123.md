@@ -56,7 +56,7 @@
 
 - [ ] **12.** Replay mode: the same platform runs a stored trade day's tape, tick by tick, with the same code as live. SUGGESTED
 
-  **Built in draft, awaiting parity evidence.** The manual replay workflow defaults to the pinned purchased NG archive. It can also restore a weekly purchased or live MBO checkpoint from markets-data and feed its records through the same book, calculations and native venues. For receipt replay the workflow loads the original platform commit and installs its requirements. The selected Git ref must contain that commit. The live receipt supplies the agent plan, first eligible cursor, last processed frame and stop reason. Replay seats from Sunday, warms through the original start, and caps delivery at the original endpoint. It records the checkpoint commit and original run ID. Receipts predating the eligibility field support whole-tape replay only. New capture receipts fingerprint the ordered MBO frames consumed. A [manual journal comparison](../../.github/workflows/compare_recorded_replay.yml) reads a completed pair from markets-data, compares the recorded input window and ordered strategy decisions, and identifies the first differing signal by rule, journal sequence and source reference. Evidence from an authorized live run and its replay remains outstanding.
+  **Built in draft, awaiting parity evidence.** The manual replay workflow defaults to the pinned purchased NG archive. It can also restore a weekly purchased or live MBO checkpoint from markets-data and feed its records through the same book, calculations and native venues. For receipt replay the workflow loads the original platform commit and installs its requirements. The selected Git ref must contain that commit. The live receipt supplies the agent plan, first eligible cursor, last processed frame and stop reason. Replay seats from Sunday, warms through the original start, and caps delivery at the original endpoint. It records the checkpoint commit and original run ID. Receipts predating the eligibility field support whole-tape replay only. New capture receipts fingerprint the ordered MBO frames consumed and retain strategy timer expiries admitted after the final processed frame. Receipt replay applies those timers before the recorded stop. A [manual journal comparison](../../.github/workflows/compare_recorded_replay.yml) reads a completed pair from markets-data, compares the recorded input window and ordered strategy decisions, and identifies the first differing signal by rule, journal sequence and source reference. Evidence from an authorized live run and its replay remains outstanding.
 
 ## THE RULES OF THE HOUSE
 
@@ -74,7 +74,7 @@
 
 - [ ] **16.** NO AVERAGING, pooling, ranking or labels. Each trade is its own line. DECIDED
 
-  **In progress.** PR 5 adds individual trade rows to the phone view. The change is in draft.
+  **Built in draft.** The phone page and trades API keep one chronological row per run, strategy and trade ID in both the full run and the strategy filter. A signal can open a row before an order exists. Later orders, partial fills and administrative closes update that row. A manager’s trade retains its own row and can reference its parent entry. Review and merge are pending.
 
 - [ ] **17.** How a paper fill is priced: OPEN, Greg's word. Until then each paper trade carries both quotes (bid and ask) at its entry and its exit, and no result figure.
 
@@ -96,7 +96,7 @@
 
 - [ ] **20.** A run STOPS ITSELF AT 5.75 HOURS, flattens every position, and marks each closing order "flattened at the 5.75-hour stop": not trade data. DECIDED
 
-  **In progress.** Main stops and records administrative closes for quote-only positions. PR 5 adds cancellation and liquidation of filled inventory and records any unfilled remainder. On feed loss, the draft cancels resting orders and records the actual contracts still held for each trade. A stop now records the strategy close signals, then cancels and liquidates once per venue and trade. Any partial liquidation carries the remaining inventory. Operational evidence is pending.
+  **Built in draft, awaiting stop evidence.** The authorized Actions job starts one 5.75-hour clock shared by the recorder, preflight and paper runner. The runner rechecks it after a feed read and before matching. On the clock stop it cancels resting orders, submits one administrative close per trade with filled inventory, and marks the order and resulting fills as excluded from trade data. A failed close leaves the other trades eligible for shutdown. The terminal journal and receipt record elapsed time, outstanding order tags, actual remaining contracts and errors. A failed or incomplete clock-stop liquidation is reported as a shutdown failure. An authorized run is still needed to demonstrate this behavior.
 
 - [x] **21.** Each run starts over new. Nothing carries over. DECIDED
 
@@ -114,11 +114,11 @@
 
 - [ ] **24.** REAL TIME: every signal, order, fill and status the moment it happens, on one page that reads well on a phone. DECIDED
 
-  **In progress.** The server-rendered phone page streams journal events. PR 5 adds native fill events and HTML/htmx navigation. The filtered phone view also shows the stop reason, the last processed input and the recorder endpoint. Hosted delivery is pending.
+  **Built in draft, awaiting hosted delivery.** The Render phone view follows the latest run across stops and reconnects. A selected run stays pinned. Signals, order instructions, individual fills and status changes appear in journal order, newest first on the page. A strategy filter retains run-wide status events. Earlier events are accessible on the same page. The runner sends pending journal events in sequence to Render alongside required Git pushes. An authorized run and hosted phone observation are still needed to demonstrate delivery.
 
 - [ ] **25.** The same events appended to the git record in markets-data, pushed every minute and at once on every order and fill. DECIDED
 
-  **In progress.** The publisher targets markets-data on orders and each minute. PR 5 snapshots each tick containing orders or fills before delivering its events to Render. A retry pushes the pending commit before capturing any newer journal state. Git and relay delivery are attempted independently at shutdown. Operational evidence is pending.
+  **Built in draft, awaiting publication evidence.** Each journaled order and fill queues its exact event-file and receive-time boundaries for a distinct Git commit on the run’s markets-data branch. The watchdog schedules a snapshot every minute independently of Render. The Git worker publishes in order and retries the same commit after an ambiguous push. The runner waits for outstanding order and fill pushes before admitting the next tick. Shutdown drains administrative events and publishes the receipt. An authorized run is still needed to observe the remote commit sequence and timing.
 
 - [ ] **26.** A phone notice for: a budget stop, a run stop, a failure. The live store and the notice service are named to Greg before anything is set up. OPEN
 

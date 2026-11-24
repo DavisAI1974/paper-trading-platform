@@ -8,38 +8,72 @@ p{margin:.35rem 0}article{padding:1rem 0;border-bottom:1px solid #344146}small{d
 select,button{font:inherit;padding:.35rem;background:#1b292a;color:#fff;border:1px solid #70817b;border-radius:.3rem}
 form{display:flex;gap:.7rem;align-items:end;flex-wrap:wrap;margin:1rem 0}label{display:grid;font-size:.9rem}#status{color:#9ce6ba}
 #trades:not(:empty) + .empty-trades{display:none}
-details li{overflow-wrap:anywhere}details a{color:#9ce6ba}
+.trade-row{padding:.6rem 0;border-bottom:1px solid #344146}.trade-row summary{font-variant-numeric:tabular-nums}
+details li{overflow-wrap:anywhere}a{color:#9ce6ba}
 .spec{white-space:pre-wrap;color:#ccdad7}summary{cursor:pointer}
 </style><script defer src="/static/htmx-2.0.8/htmx.min.js"></script></head><body hx-history="false">
-<header><small>$venue · $asset · Paper trading</small><h1>$title</h1><p id="status" role="status">$status</p><div id="stop-details">$stop_details</div></header>
+<header><small>$venue · $asset · Paper trading</small><h1>$title</h1><small id="run-info" $hide_run>Run <a id="current-run" href="$run_url">$displayed_run</a> <span id="trade-day">$trade_day</span></small>
+<p id="status" role="status">$status</p><small id="connection" role="status"></small>$latest_link<div id="stop-details">$stop_details</div></header>
 <form method="get" action="/" hx-boost="true" hx-push-url="true" $hide_filters><input type="hidden" name="run" value="$run"><label>Market<select name="market">$markets</select></label><label>Strategy<select name="rule">$rules</select></label><button>Show</button></form>
-$run_history
+<div id="run-history">$run_history</div>
 $definition
 $trade_section
 <section id="events" data-stream="$stream" aria-label="Trading events">$cards</section>
+<div id="earlier-events">$earlier</div>
 <script>
 (()=>{
 const list=document.querySelector('#events'),statusLine=document.querySelector('#status');
 if(list.dataset.stream){
   const stream=new EventSource(list.dataset.stream);
   list.addEventListener('htmx:beforeCleanupElement',({target})=>{if(target===list) stream.close()});
+  const connection=document.getElementById('connection');
+  const history=document.getElementById('run-history');
+  function updateHistory(html){
+    const wasOpen=history.querySelector('details')?.open;
+    history.innerHTML=html;
+    if(wasOpen && history.firstElementChild) history.firstElementChild.open=true;
+  }
+  stream.onopen=()=>{connection.textContent=''};
+  stream.addEventListener('run_changed',({data})=>{
+    const row=JSON.parse(data);
+    list.replaceChildren();
+    document.getElementById('trades').replaceChildren();
+    document.getElementById('earlier-events').replaceChildren();
+    document.getElementById('stop-details').replaceChildren();
+    const link=document.getElementById('current-run'), url=new URL(link.href);
+    url.searchParams.set('run',row.run);
+    link.href=url.href;
+    link.textContent=row.run;
+    document.getElementById('trade-day').textContent=row.trade_day || '';
+    document.getElementById('run-info').hidden=false;
+    updateHistory(row.history_html);
+    statusLine.textContent='active';
+  });
   stream.onmessage=({data})=>{
     const row=JSON.parse(data);
     list.insertAdjacentHTML('afterbegin',row.html);
     statusLine.textContent=row.status;
     if(row.trade_html){
-      const existing=document.getElementById('trade-'+row.trade_id);
-      if(existing) existing.outerHTML=row.trade_html;
+      const existing=document.getElementById('trade-'+row.trade_rule+'-'+row.trade_id);
+      if(existing){
+        const id=existing.id, wasOpen=existing.open;
+        const focused=existing.querySelector('summary')===document.activeElement;
+        existing.outerHTML=row.trade_html;
+        const updated=document.getElementById(id);
+        updated.open=wasOpen;
+        if(focused) updated.querySelector('summary').focus({preventScroll:true});
+      }
       else document.getElementById('trades').insertAdjacentHTML('afterbegin',row.trade_html);
     }
   };
   stream.addEventListener('finished',({data})=>{
-    const {status,stop_html}=JSON.parse(data);
-    if(stop_html) document.getElementById('stop-details').innerHTML=stop_html;
-    if(status) statusLine.textContent=status;
-    stream.close();
+    const row=JSON.parse(data);
+    document.getElementById('stop-details').innerHTML=row.stop_html || '';
+    if(row.status) statusLine.textContent=row.status;
+    updateHistory(row.history_html);
+    if(!row.follow_latest) stream.close();
   });
-  stream.onerror=()=>{statusLine.textContent='Reconnecting…'};
+  stream.onerror=()=>{connection.textContent='Reconnecting…'};
 }
 })();
 </script></body></html>

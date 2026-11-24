@@ -20,7 +20,8 @@ from root.tape import TapeFolder
 from .capture import CaptureFailure, capture_writer
 from .market import replay_market
 from .run import notify
-from .session import LIMIT_SECONDS, git
+from .run_clock import LIMIT_SECONDS, run_start_ns
+from .session import git
 
 
 # The gateway sends a heartbeat while market data is quiet. Databento allows
@@ -187,7 +188,7 @@ def main():
     args = parser.parse_args()
     if not args.greg_go or args.message_budget <= 0:
         parser.error("capture requires Greg's go and a positive delivery budget")
-    started = time.monotonic()
+    started = run_start_ns() / 1_000_000_000
     data_root = args.data.resolve()
     remote = git(data_root, "remote", "get-url", "origin").lower().removesuffix(".git")
     if remote not in ("https://github.com/davisai1974/markets-data", "git@github.com:davisai1974/markets-data"):
@@ -201,10 +202,13 @@ def main():
         parser.error("capture requires the configured phone stop and failure notices")
     outcome = "capture failure"
     try:
+        if time.monotonic() >= started + LIMIT_SECONDS:
+            outcome = "clock limit"
+            return
         with capture_writer(path, identity) as writer:
             sink = Sink(writer, args.message_budget, started)
             for sig in (signal.SIGTERM, signal.SIGINT):
-                signal.signal(sig, lambda *_: sink.stop("capture stopped"))
+                signal.signal(sig, lambda *_: sink.stop("clock limit" if time.monotonic() >= sink.deadline else "capture stopped"))
             signal.signal(signal.SIGUSR1, lambda *_: sink.failed(CaptureFailure("capture checkpoint publication failed")))
             if args.ready_file:
                 pending = args.ready_file.with_suffix(".pending")

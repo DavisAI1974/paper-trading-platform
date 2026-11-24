@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import secrets
 import sqlite3
+import time
 
 
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -17,7 +18,7 @@ from pydantic import BaseModel, Field
 from .rulebook import catalogue
 from .market import markets
 from .trades import trade_rows
-from .views import card, page, stop_details, trade_card
+from .views import card, older_events_link, page, run_history, stop_details, trade_card
 
 
 class Packet(BaseModel):
@@ -57,6 +58,9 @@ def relay():
             CREATE INDEX IF NOT EXISTS paper_order_rule ON events(
                 run, json_extract(body,'$.rule'), sequence
             ) WHERE json_extract(body,'$.kind')='paper order';
+            CREATE INDEX IF NOT EXISTS strategy_trade_events ON events(
+                run, json_extract(body,'$.rule'), json_extract(body,'$.trade_id'), sequence
+            ) WHERE json_extract(body,'$.trade_id') IS NOT NULL;
             CREATE TABLE IF NOT EXISTS sessions(run TEXT PRIMARY KEY, body TEXT NOT NULL, first_ns TEXT NOT NULL);
         """)
 
@@ -152,16 +156,23 @@ def relay():
         return {k: all_rules[k] for k in profiles[market]["rules"]}
 
     @app.get("/api/trades", dependencies=[Depends(viewer)])
-    def trades(rule: str, run: str | None = None, market: str = "nymex-ng"):
+    def trades(rule: str = "", run: str | None = None, market: str = "nymex-ng"):
         profiles = markets()
-        if market not in profiles or rule not in profiles[market]["rules"]:
+        if market not in profiles or (rule and rule not in profiles[market]["rules"]):
             raise HTTPException(404, "unknown market or rule")
         with connect() as db:
             db.execute("BEGIN")
             state = session_state(db, run, market)
             return trade_rows(db, state.get("run"), rule)
 
-    def stream_rows(after, rule, follow, run, market, html):
+    def recent_runs(db, market):
+        return db.execute(
+            "SELECT run, json_extract(body,'$.trade_day'), json_extract(body,'$.status') "
+            "FROM sessions WHERE json_extract(body,'$.market')=? ORDER BY first_ns DESC LIMIT 50",
+            (market,),
+        ).fetchall()
+
+    def stream_rows(after, rule, follow, run, market, html, *, latest=False):
         profiles = markets()
         if market not in profiles or rule and rule not in profiles[market]["rules"]:
             raise HTTPException(404, "unknown market or rule")
@@ -169,11 +180,23 @@ def relay():
 
         async def rows():
             cursor, current = after, run
+            terminal_sent = False
+            heartbeat = time.monotonic()
+            if html:
+                yield ": connected\n\n"
             while True:
                 with connect() as db:
                     # Keep terminal status and the event batch in the same SQLite snapshot.
                     db.execute("BEGIN")
-                    state = session_state(db, current, market)
+                    state = session_state(db, None if latest else current, market)
+                    changed_run = latest and "run" in state and state["run"] != current
+                    if changed_run:
+                        cursor = -1
+                        terminal_sent = False
+                    history_html = ""
+                    ended = "run" in state and state["status"] != "active"
+                    if html and (changed_run or (ended and not terminal_sent)):
+                        history_html = run_history(market, rule, recent_runs(db, market))
                     batch = []
                     trade_updates = {}
                     if "run" in state:
@@ -182,41 +205,59 @@ def relay():
                             "SELECT sequence,body FROM events WHERE run=? AND sequence>? ORDER BY sequence LIMIT 256",
                             (current, cursor),
                         ).fetchall()
-                        if html and rule:
+                        if html:
+                            changed_trades = {}
                             for seq, body in batch:
                                 event = json.loads(body)
-                                if event.get("rule") != rule or not event.get("trade_id"):
+                                if not event.get("trade_id") or (rule and event.get("rule") != rule):
                                     continue
                                 order = event.get("kind") in ("paper order", "fill", "order status")
-                                interrupted = event.get("action") in ("not scored", "observation interrupted")
-                                if order or interrupted:
-                                    match = trade_rows(db, current, rule, trade_id=event["trade_id"], through=seq)
-                                    if match:
-                                        trade_updates[seq] = match[0]
+                                signal = event["kind"] == "signal" and event.get("action") in (
+                                    "open", "close", "exit", "not scored", "observation interrupted"
+                                )
+                                if order or signal:
+                                    changed_trades[event["rule"], event["trade_id"]] = seq
+                            # Every event still gets a card. Render the trade row once at
+                            # its last change in this batch, including all partial fills.
+                            for (owner, trade_id), seq in changed_trades.items():
+                                match = trade_rows(db, current, owner, trade_id=trade_id, through=seq)
+                                if match:
+                                    trade_updates[seq] = match[0]
+                if changed_run:
+                    data = json.dumps(dict(run=current, trade_day=state.get("trade_day"), history_html=history_html))
+                    yield f"id: {current}/-1\nevent: run_changed\ndata: {data}\n\n"
+                last_sent = cursor
                 for cursor, body in batch:
                     event = json.loads(body)
-                    if rule and event.get("rule") != rule:
+                    if rule and event.get("rule") != rule and not (html and event["kind"] == "status"):
                         continue
+                    last_sent = cursor
                     if html:
-                        payload = dict(html=card(event, profile), status=state["status"])
+                        reason = event.get("reason") if event["kind"] == "status" else None
+                        payload = dict(html=card(event, profile), status=reason if reason and reason != "started" else "active")
                         if cursor in trade_updates:
                             trade = trade_updates[cursor]
-                            payload.update(trade_id=trade["trade_id"], trade_html=trade_card(trade, profile))
+                            payload.update(trade_id=trade["trade_id"], trade_rule=trade["rule"],
+                                           trade_html=trade_card(trade, profile))
                         data = json.dumps(payload)
                         yield f"id: {current}/{cursor}\nevent: message\ndata: {data}\n\n"
                     else:
                         yield body + "\n"
+                if html and last_sent != cursor:
+                    # A quiet strategy still advances its reconnect position over other rules.
+                    yield f"id: {current}/{cursor}\nevent: cursor\ndata: {{}}\n\n"
                 if len(batch) == 256:
                     continue
-                if not follow or ("run" in state and state["status"] != "active"):
-                    if html:
-                        details = stop_details(state, rule)
-                        payload = {"status": state["status"]}
-                        if details:
-                            payload["stop_html"] = details
-                        data = json.dumps(payload)
-                        yield f"event: finished\ndata: {data}\n\n"
+                if ended and html and not terminal_sent:
+                    payload = dict(status=state["status"], stop_html=stop_details(state, rule), follow_latest=latest,
+                                   history_html=history_html)
+                    yield f"event: finished\ndata: {json.dumps(payload)}\n\n"
+                    terminal_sent = True
+                if not follow or (ended and not latest):
                     return
+                if html and time.monotonic() - heartbeat >= 15:
+                    yield ": keep-alive\n\n"
+                    heartbeat = time.monotonic()
                 await asyncio.sleep(0.1)
 
         return StreamingResponse(
@@ -241,17 +282,51 @@ def relay():
         rule: str = "",
         run: str = "",
         market: str = "nymex-ng",
+        latest: bool = False,
+        displayed: str = "",
         last_event_id: str | None = Header(default=None),
     ):
+        if latest and run:
+            raise HTTPException(400, "choose latest or a pinned run")
+        current = displayed if latest else run
         if last_event_id:
             prior, _, seq = last_event_id.partition("/")
-            if not seq.isdigit() or run and run != prior:
+            if not prior or not (seq.isdigit() or (latest and seq == "-1")) or (run and run != prior):
                 raise HTTPException(400, "invalid stream cursor")
-            after, run = max(after, int(seq)), prior
-        return stream_rows(after, rule, True, run, market, True)
+            after = max(after, int(seq)) if current == prior else int(seq)
+            current = prior
+        return stream_rows(after, rule, True, current, market, True, latest=latest)
+
+    def event_history(db, run, rule, before):
+        conditions = ["run=?"]
+        args = [run]
+        if rule:
+            conditions.append("(json_extract(body,'$.rule')=? OR json_extract(body,'$.kind')='status')")
+            args.append(rule)
+        if before is not None:
+            conditions.append("sequence<?")
+            args.append(before)
+        rows = db.execute(
+            f"SELECT body FROM events WHERE {' AND '.join(conditions)} ORDER BY sequence DESC LIMIT 101", args,
+        ).fetchall()
+        events = [json.loads(row[0]) for row in rows[:100]]
+        return events, events[-1]["sequence"] if len(rows) > 100 else None
+
+    @app.get("/event-history", response_class=HTMLResponse, dependencies=[Depends(viewer)])
+    def earlier_events(run: str, before: int, market: str = "nymex-ng", rule: str = ""):
+        profiles = markets()
+        if market not in profiles or (rule and rule not in profiles[market]["rules"]):
+            raise HTTPException(404, "unknown market or rule")
+        with connect() as db:
+            db.execute("BEGIN")
+            state = session_state(db, run, market)
+            if "run" not in state:
+                raise HTTPException(404, "unknown run")
+            events, earlier = event_history(db, run, rule, before)
+        return "".join(card(event, profiles[market]) for event in events) + older_events_link(market, rule, run, earlier)
 
     @app.get("/", response_class=HTMLResponse, dependencies=[Depends(viewer)])
-    def dashboard(market: str = "nymex-ng", rule: str = "", run: str = ""):
+    def dashboard(market: str = "nymex-ng", rule: str = "", run: str = "", before: int | None = None):
         if market not in markets():
             raise HTTPException(404, "unknown market")
         if rule not in markets()[market]["rules"]:
@@ -259,18 +334,13 @@ def relay():
         with connect() as db:
             db.execute("BEGIN")
             state = session_state(db, run, market)
-            recent = db.execute(
-                "SELECT body FROM events WHERE run=? AND (?='' OR json_extract(body,'$.rule')=?) "
-                "ORDER BY sequence DESC LIMIT 100",
-                (state.get("run"), rule, rule),
-            ).fetchall()
-            trades = trade_rows(db, state.get("run"), rule) if rule else []
-            runs = db.execute(
-                "SELECT run, json_extract(body,'$.trade_day'), json_extract(body,'$.status') "
-                "FROM sessions WHERE json_extract(body,'$.market')=? ORDER BY first_ns DESC LIMIT 50",
-                (market,),
-            ).fetchall()
-        return page(market, rule, state, [json.loads(r[0]) for r in reversed(recent)],
-                    run=run or state.get("run", ""), trades=trades, runs=runs)
+            displayed_run = state.get("run")
+            journal_cursor, = db.execute("SELECT coalesce(max(sequence),-1) FROM events WHERE run=?",
+                                         (displayed_run,)).fetchone()
+            recent, earlier = event_history(db, displayed_run, rule, before)
+            trades = trade_rows(db, state.get("run"), rule)
+            runs = recent_runs(db, market)
+        return page(market, rule, state, reversed(recent), run=run, trades=trades, runs=runs,
+                    earlier=earlier, archived_page=before is not None, journal_cursor=journal_cursor)
 
     return app

@@ -9,8 +9,10 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 from root.calendar import week_sunday
+from .run_clock import LIMIT_SECONDS, run_start_ns
 
 
 def launch(module, arguments, credentials):
@@ -45,6 +47,13 @@ def main():
     args = parser.parse_args()
     if not args.greg_go or min(args.message_budget, args.event_budget) <= 0:
         parser.error("Greg's go and positive budgets are required")
+    started = run_start_ns()
+    os.environ["PAPER_RUN_STARTED_NS"] = str(started)
+    deadline = started / 1_000_000_000 + LIMIT_SECONDS
+    if time.monotonic() >= deadline:
+        from .run import notify
+        notify("5.75-hour limit reached before capture startup", "preflight")
+        return 1
     plan = os.environ["EXECUTION_PLAN"]
     common = ["--data", args.data, "--trade-day", args.trade_day]
     week = week_sunday(args.trade_day).isoformat()
@@ -62,19 +71,19 @@ def main():
             recorder = launch("record_mbo", [*common, "--source", "live", "--message-budget", args.message_budget,
                                               "--ready-file", ready, "--greg-go"], notices | {"DATABENTO_API_KEY"})
             while not ready.is_file():
-                if stopping.wait(0.1):
+                if stopping.wait(0.1) or time.monotonic() >= deadline:
                     return 1
                 if recorder.poll() is not None or backup.poll() is not None:
                     raise RuntimeError("capture stopped before opening a new connection")
             connection = int(ready.read_text(encoding="ascii"))
-            if stopping.is_set() or recorder.poll() is not None or backup.poll() is not None:
+            if stopping.is_set() or time.monotonic() >= deadline or recorder.poll() is not None or backup.poll() is not None:
                 return 1
             paper = launch("run", [*common, "--market", "nymex-ng", "--message-budget", args.message_budget,
                                    "--event-budget", args.event_budget, "--agent-plan", plan, "--capture", db,
                                    "--capture-connection", connection, "--greg-go"],
                            notices | {"PAPER_RELAY_TOKEN", "MARKETS_DATA_TOKEN"})
             while paper.poll() is None and recorder.poll() is None and backup.poll() is None:
-                if stopping.wait(0.2):
+                if stopping.wait(0.2) or time.monotonic() >= deadline:
                     break
             backup_failed = backup.poll() is not None
             if recorder.poll() is None:

@@ -31,7 +31,7 @@ def batches(folder, receipt, size=128):
                 if event["kind"] != "status" or event.get("reason") != receipt["status"]:
                     raise ValueError("journal is missing the terminal status from its receipt")
                 state.update(status=receipt["status"], cursor=receipt["delivered"] - 1)
-                for field in ("capture_end", "last_source"):
+                for field in ("capture_end", "last_source", "shutdown"):
                     if receipt.get(field) is not None:
                         state[field] = receipt[field]
                 if "remaining_paper_inventory" in receipt:

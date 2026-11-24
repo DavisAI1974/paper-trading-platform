@@ -1,70 +1,94 @@
-"""Project the relay's append-only paper orders into one row per strategy trade."""
+"""Read each strategy trade from the run journal in sequence order."""
 
 import json
 
 
-def trade_rows(db, run, rule, *, trade_id=None, through=None):
-    # An entry rule owns its open. A manager's independent exit points back to
-    # that open and never changes the parent position's closing order.
-    where = ["a.run=?", "json_extract(a.body,'$.rule')=?",
-             "json_extract(a.body,'$.kind')='paper order'",
-             "json_extract(a.body,'$.action') IN ('open','exit')"]
-    params = [run, rule]
+def _parent_entry(db, run, exit_event):
+    """Older manager exits refer to a parent entry instead of placing an entry order."""
+    parent = exit_event.get("source_trade_id")
+    if not parent:
+        return None
+    owner = exit_event.get("entry_rule")
+    entries = db.execute(
+        "SELECT body FROM events WHERE run=? AND sequence<=? "
+        "AND json_extract(body,'$.trade_id')=? AND json_extract(body,'$.action')='open' "
+        "AND json_extract(body,'$.kind') IN ('paper order','signal') "
+        "AND (? IS NULL OR json_extract(body,'$.rule')=?) ORDER BY sequence",
+        (run, exit_event["sequence"], parent, owner, owner),
+    )
+    selected = None
+    for (body,) in entries:
+        entry = json.loads(body)
+        if selected is not None and selected["rule"] != entry["rule"]:
+            return None
+        if selected is None or selected["kind"] == "signal":
+            selected = entry
+    return selected
+
+
+def trade_rows(db, run, rule=None, *, trade_id=None, through=None):
+    where = ["run=?", "json_extract(body,'$.trade_id') IS NOT NULL"]
+    params = [run]
+    if rule:
+        where.append("json_extract(body,'$.rule')=?")
+        params.append(rule)
     if trade_id is not None:
-        where.append("json_extract(a.body,'$.trade_id')=?")
+        where.append("json_extract(body,'$.trade_id')=?")
         params.append(trade_id)
     if through is not None:
-        where.append("a.sequence<=?")
+        where.append("sequence<=?")
         params.append(through)
-    sql = f"""
-        SELECT a.body, b.body, (
-            SELECT s.body FROM events s WHERE s.run=a.run
-              AND json_extract(s.body,'$.trade_id')=json_extract(a.body,'$.trade_id')
-              AND json_extract(s.body,'$.kind')='signal'
-              AND json_extract(s.body,'$.action') IN ('not scored','observation interrupted')
-              AND (? IS NULL OR s.sequence<=?)
-            ORDER BY s.sequence DESC LIMIT 1
-        ) FROM events a
-        LEFT JOIN events b ON b.run=a.run
-          AND json_extract(b.body,'$.kind')='paper order'
-          AND json_extract(b.body,'$.trade_id')=CASE json_extract(a.body,'$.action')
-              WHEN 'exit' THEN json_extract(a.body,'$.source_trade_id') ELSE json_extract(a.body,'$.trade_id') END
-          AND json_extract(b.body,'$.action')=CASE json_extract(a.body,'$.action')
-                                              WHEN 'exit' THEN 'open' ELSE 'close' END
-          AND (? IS NULL OR b.sequence<=?)
-          AND b.sequence=(SELECT MAX(last.sequence) FROM events last WHERE last.run=b.run
-                AND json_extract(last.body,'$.kind')='paper order'
-                AND json_extract(last.body,'$.trade_id')=json_extract(b.body,'$.trade_id')
-                AND json_extract(last.body,'$.action')=json_extract(b.body,'$.action')
-                AND (? IS NULL OR last.sequence<=?))
-        WHERE {' AND '.join(where)}
-        ORDER BY a.sequence DESC
-    """
-    rows = []
-    for body, other, observation in db.execute(sql, (through, through, through, through, through, through, *params)):
-        order = json.loads(body)
-        paired = json.loads(other) if other else None
-        entry, exit_order = (paired, order) if order["action"] == "exit" else (order, paired)
-        fills = [
-            json.loads(item[0]) for item in db.execute(
-                "SELECT body FROM events WHERE run=? AND json_extract(body,'$.trade_id')=? "
-                "AND json_extract(body,'$.rule')=? AND json_extract(body,'$.kind')='fill' "
-                "AND (? IS NULL OR sequence<=?) ORDER BY sequence",
-                (run, order["trade_id"], rule, through, through),
-            )
-        ]
-        statuses = {}
-        for leg in (entry, exit_order):
-            if leg is None or not leg.get("order_id"):
+    where.append("""(json_extract(body,'$.kind') IN ('paper order','order status','fill')
+        OR (json_extract(body,'$.kind')='signal' AND json_extract(body,'$.action')
+            IN ('open','close','exit','not scored','observation interrupted')))""")
+    events = db.execute(f"SELECT body FROM events WHERE {' AND '.join(where)} ORDER BY sequence", params)
+    rows = {}
+    for (body,) in events:
+        event = json.loads(body)
+        kind, action = event["kind"], event.get("action")
+        key = event["rule"], event["trade_id"]
+        row = rows.get(key)
+        if row is None:
+            if kind not in ("signal", "paper order") or action not in ("open", "close", "exit"):
                 continue
-            last = db.execute(
-                "SELECT body FROM events WHERE run=? AND json_extract(body,'$.order_id')=? "
-                "AND json_extract(body,'$.kind') IN ('order status','fill') "
-                "AND (? IS NULL OR sequence<=?) ORDER BY sequence DESC LIMIT 1",
-                (run, leg["order_id"], through, through),
-            ).fetchone()
-            if last:
-                statuses[leg["order_id"]] = json.loads(last[0])
-        rows.append(dict(order_states=statuses, fills=fills, trade_id=order["trade_id"], rule=rule, entry=entry, exit=exit_order,
-                         observation=json.loads(observation) if observation else None))
-    return rows
+            row = rows[key] = dict(rule=key[0], trade_id=key[1], entry=None, exit=None,
+                                   entry_signal=None, exit_signal=None, orders=[], fills=[],
+                                   order_states={}, observation=None)
+        if kind == "paper order":
+            row["orders"].append(event)
+            if action == "open" and row["entry"] is None:
+                row["entry"] = event
+            elif action in ("close", "exit"):
+                row["exit"] = event
+        elif kind == "signal":
+            if action == "open":
+                row["entry_signal"] = event
+            elif action in ("close", "exit"):
+                row["exit_signal"] = event
+            else:
+                row["observation"] = event
+        else:
+            if kind == "fill":
+                row["fills"].append(event)
+            if event.get("order_id"):
+                row["order_states"][event["order_id"]] = event
+
+    for row in rows.values():
+        exit_event = row["exit"] or row["exit_signal"]
+        if row["entry"] or row["entry_signal"] or not exit_event or exit_event["action"] != "exit":
+            continue
+        parent = _parent_entry(db, run, exit_event)
+        if parent:
+            if parent["kind"] == "paper order":
+                row["entry"] = parent
+                last = db.execute(
+                    "SELECT body FROM events WHERE run=? AND json_extract(body,'$.rule')=? "
+                    "AND json_extract(body,'$.order_id')=? AND json_extract(body,'$.kind') IN ('order status','fill') "
+                    "AND (? IS NULL OR sequence<=?) ORDER BY sequence DESC LIMIT 1",
+                    (run, parent["rule"], parent["order_id"], through, through),
+                ).fetchone()
+                if last:
+                    row["order_states"][parent["order_id"]] = json.loads(last[0])
+            else:
+                row["entry_signal"] = parent
+    return list(reversed(rows.values()))
