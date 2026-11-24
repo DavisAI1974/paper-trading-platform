@@ -36,6 +36,7 @@ jobs:
   agent:
     if: ${{ inputs.greg_go && github.actor == 'DavisAI1974' && github.triggering_actor == 'DavisAI1974' && github.run_attempt == 1 }}
     runs-on: ubuntu-latest
+    timeout-minutes: 355
     steps:
       - name: Read the selected platform commit
         shell: bash
@@ -65,8 +66,9 @@ jobs:
           PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
         run: |
+          read -r -a paths <<< "$ATTACHMENTS"
           attach_args=()
-          for path in $ATTACHMENTS; do
+          for path in "${paths[@]}"; do
             attach_args+=(--attach "$path")
           done
           run_id=$(python -c 'import uuid; print(uuid.uuid4().hex)')
