@@ -292,6 +292,13 @@ class PaperExecution:
             if rule != parent:
                 details.update(entry_rule=parent, source_trade_id=key, management_only=True)
             venue.emit("order status", **details, execution_event="observation ended with paper exposure")
+            for identifier in working:
+                # The observation has ended, so an order of it that is still resting is withdrawn. Left
+                # working it could fill later with no rule watching it. The cancel carries the interruption's
+                # reason and is not trade data. Contracts already held are left as recorded above.
+                order, order_key, action, _ = venue.orders[identifier]
+                venue.orders[identifier] = (order, order_key, action, signal["reason"])
+                venue.engine.cancel_order(order)
 
     def submit(self, event, order_id):
         rule = event["rule"]
