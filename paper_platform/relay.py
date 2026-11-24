@@ -4,12 +4,14 @@ import asyncio
 import base64
 import json
 import os
+from pathlib import Path
 import secrets
 import sqlite3
 
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .rulebook import catalogue
@@ -55,6 +57,8 @@ def relay():
             raise HTTPException(401, headers={"WWW-Authenticate": 'Basic realm="NG paper dashboard"'})
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+    app.mount("/static", StaticFiles(directory=Path(__file__).with_name("static")), name="static")
 
     @app.get("/health")
     def health():
