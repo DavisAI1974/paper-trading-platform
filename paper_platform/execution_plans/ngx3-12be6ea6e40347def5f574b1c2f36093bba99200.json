@@ -1,0 +1,536 @@
+{
+  "databento_instrument_id": 150611,
+  "instrument": {
+    "activation_ns": 1290637800000000000,
+    "asset_class": "COMMODITY",
+    "currency": "USD",
+    "exchange": "XNYM",
+    "expiration_ns": 1698431400000000000,
+    "id": "NGX3.GLBX",
+    "info": {},
+    "lot_size": "1",
+    "maker_fee": "0",
+    "margin_init": "0",
+    "margin_maint": "0",
+    "max_price": null,
+    "max_quantity": null,
+    "min_price": null,
+    "min_quantity": "1",
+    "multiplier": "10000",
+    "price_increment": "0.001",
+    "price_precision": 3,
+    "raw_symbol": "NGX3",
+    "size_increment": "1",
+    "size_precision": 0,
+    "taker_fee": "0",
+    "tick_scheme_name": null,
+    "ts_event": 1696158307834444822,
+    "ts_init": 1696158307834444822,
+    "type": "FuturesContract",
+    "underlying": "NG"
+  },
+  "rules": {
+    "CL01": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross_limit"
+      }
+    },
+    "CL02": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "post"
+      }
+    },
+    "CL03": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross_limit"
+      }
+    },
+    "CL04": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross_limit"
+      }
+    },
+    "CL05": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross"
+      }
+    },
+    "CL06": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross_limit"
+      }
+    },
+    "CL07": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross"
+      }
+    },
+    "CL08": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross_limit"
+      }
+    },
+    "CL09": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "post"
+      }
+    },
+    "CL10": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross"
+      }
+    },
+    "CL11": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross"
+      }
+    },
+    "CL12": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "post"
+      }
+    },
+    "CL13": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross"
+      }
+    },
+    "CL14": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross_limit"
+      }
+    },
+    "CL15": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross"
+      }
+    },
+    "CL16": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross"
+      }
+    },
+    "CL17": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross_limit"
+      }
+    },
+    "CX01": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "post"
+      }
+    },
+    "CX02": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross_limit"
+      }
+    },
+    "CX03": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross_limit"
+      }
+    },
+    "CX04": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross_limit"
+      }
+    },
+    "CX05": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "entry_rules": [
+        "CL01",
+        "CL02",
+        "CL03",
+        "CL04",
+        "CL05",
+        "CL06",
+        "CL07",
+        "CL08",
+        "CL09",
+        "CL10",
+        "CL11",
+        "CL12",
+        "CL13",
+        "CL14",
+        "CL15",
+        "CL16",
+        "CL17",
+        "CX01",
+        "CX03",
+        "CX07",
+        "CX10",
+        "CX15"
+      ],
+      "on_parent_close": "exit",
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross"
+      }
+    },
+    "CX06": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "entry_rules": [
+        "CL01",
+        "CL02",
+        "CL03",
+        "CL04",
+        "CL05",
+        "CL06",
+        "CL07",
+        "CL08",
+        "CL09",
+        "CL10",
+        "CL11",
+        "CL12",
+        "CL13",
+        "CL14",
+        "CL15",
+        "CL16",
+        "CL17",
+        "CX02",
+        "CX04",
+        "CX08",
+        "CX09",
+        "CX15"
+      ],
+      "on_parent_close": "exit",
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross"
+      }
+    },
+    "CX07": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross_limit"
+      }
+    },
+    "CX08": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross_limit"
+      }
+    },
+    "CX09": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "post"
+      }
+    },
+    "CX10": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "post"
+      }
+    },
+    "CX11": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "entry_rules": [
+        "CL01",
+        "CL02",
+        "CL03",
+        "CL04",
+        "CL05",
+        "CL06",
+        "CL07",
+        "CL08",
+        "CL09",
+        "CL10",
+        "CL11",
+        "CL12",
+        "CL13",
+        "CL14",
+        "CL15",
+        "CL16",
+        "CL17",
+        "CX01",
+        "CX03",
+        "CX07",
+        "CX10",
+        "CX15"
+      ],
+      "on_parent_close": "exit",
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross"
+      }
+    },
+    "CX12": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "entry_rules": [
+        "CL01",
+        "CL02",
+        "CL03",
+        "CL04",
+        "CL05",
+        "CL06",
+        "CL07",
+        "CL08",
+        "CL09",
+        "CL10",
+        "CL11",
+        "CL12",
+        "CL13",
+        "CL14",
+        "CL15",
+        "CL16",
+        "CL17",
+        "CX02",
+        "CX04",
+        "CX08",
+        "CX09",
+        "CX15"
+      ],
+      "on_parent_close": "exit",
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross"
+      }
+    },
+    "CX13": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "entry_rules": [
+        "CL01",
+        "CL02",
+        "CL03",
+        "CL04",
+        "CL05",
+        "CL06",
+        "CL07",
+        "CL08",
+        "CL09",
+        "CL10",
+        "CL11",
+        "CL12",
+        "CL13",
+        "CL14",
+        "CL15",
+        "CL16",
+        "CL17",
+        "CX01",
+        "CX03",
+        "CX07",
+        "CX10",
+        "CX15"
+      ],
+      "on_parent_close": "exit",
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross"
+      }
+    },
+    "CX14": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "entry_rules": [
+        "CL01",
+        "CL02",
+        "CL03",
+        "CL04",
+        "CL05",
+        "CL06",
+        "CL07",
+        "CL08",
+        "CL09",
+        "CL10",
+        "CL11",
+        "CL12",
+        "CL13",
+        "CL14",
+        "CL15",
+        "CL16",
+        "CL17",
+        "CX02",
+        "CX04",
+        "CX08",
+        "CX09",
+        "CX15"
+      ],
+      "on_parent_close": "exit",
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross"
+      }
+    },
+    "CX15": {
+      "close": {
+        "offset_ticks": 0,
+        "style": "cross"
+      },
+      "contracts": 1,
+      "open": {
+        "offset_ticks": 0,
+        "style": "cross_limit"
+      }
+    }
+  }
+}

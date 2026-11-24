@@ -98,9 +98,9 @@ def test_trade_prefix_including_equal_nanoseconds(feed):
     assert all("fill_price" not in e and "pnl" not in e for e in left)
 
 
-def test_thirty_pinned_rule_definitions():
+def test_pinned_rule_definitions():
     rules = catalogue()
-    assert set(rules) == {f"{family}{i:02}" for family in ("CL", "CX") for i in range(1, 16)}
+    assert set(rules) == {f"CL{i:02}" for i in range(1, 18)} | {f"CX{i:02}" for i in range(1, 16)}
     assert sum(r["role"] == "manager" for r in rules.values()) == 6
     for name, r in rules.items():
         assert r["specification"].startswith("## " + name) and "/blob/" in r["evidence"]

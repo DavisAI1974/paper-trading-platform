@@ -9,6 +9,7 @@ from .claude_rules import ClaudeRules, sign
 from .cx_observations import Responses
 from .inputs import StrategyInputs
 from .rulebook import catalogue, confirmation, management, manager_action
+from .unsided_print_rules import UnsidedPrintRules
 
 
 def quote(t):
@@ -20,6 +21,7 @@ class Engine:
         self.run_id = run_id
         self.inputs = StrategyInputs(trade_day)
         self.cl = ClaudeRules()
+        self.unsided_print_rules = UnsidedPrintRules()
         self.rules = catalogue() if rules is None else rules
         self.cx = [r for r in self.rules.values() if r["family"] == "CX"]
         self.open = {}
@@ -238,6 +240,7 @@ class Engine:
         t = self.inputs.at(message)
         self.last = t
         signals = self.cl.at(message, t)
+        print_signals = self.unsided_print_rules.at(t)
         events = []
         interrupted = (
             "settlement"
@@ -259,8 +262,9 @@ class Engine:
         for key, idea in list(self.open.items()):
             rule = self.rules[idea["rule"]]
             if rule["family"] == "CL":
-                close = self.cl.close(idea, message, t)
-                unsided = t["trade"] and t["aggressor"] is None
+                reads_unsided = rule.get("reads_unsided_prints", False)
+                close = self.unsided_print_rules.close(idea) if reads_unsided else self.cl.close(idea, message, t)
+                unsided = t["trade"] and t["aggressor"] is None and not reads_unsided
                 if unsided:
                     close = None
                 if t["settlement"] and close:
@@ -309,10 +313,11 @@ class Engine:
                 events.extend(self.manage(key, idea, t))
             if close:
                 events.append(self.close_trade(key, close, t))
-        if not t["trade"] or t["aggressor"] is not None:
-            for signal in signals:
-                if signal["rule"] in self.rules:
-                    events.append(self.open_trade(signal, t))
+        if t["trade"] and t["aggressor"] is None:
+            signals = []
+        for signal in signals + print_signals:
+            if signal["rule"] in self.rules:
+                events.append(self.open_trade(signal, t))
         if interrupted:
             self.p = None
         elif t["trade"]:

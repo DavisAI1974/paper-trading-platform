@@ -1,0 +1,9 @@
+{
+  "id": "CL17",
+  "family": "CL",
+  "role": "entry",
+  "reads_unsided_prints": true,
+  "source": "https://github.com/DavisAI1974/markets-data/blob/af2a0efab906302a6302e70c06f108b681d66857/tasks/family-research-20261022/research-union-current/strategy-20261123-claude/VERSIONS.md",
+  "evidence": "https://github.com/DavisAI1974/markets-data/blob/af2a0efab906302a6302e70c06f108b681d66857/tasks/family-research-20261022/research-union-current/strategy-20261123-claude/VERSIONS.md",
+  "specification": "## CL17 (v1, added 2026-11-24). The print with no side, taken at the quote it traded at\n\n- WHEN: unknown.\n- TRIGGER: a print with no side trades at its own best offer (mirror: at its own best bid), and it is the first\n  print with no side there since that quote last stepped.\n- DECIDED AT: that print.\n- SIDE: the side a marked print there would have had. BUY at the offer. SELL at the bid.\n- CLOSES: at the first step back of the quote it traded at. RIGHT if that quote stepped further away first (the\n  offer up for a BUY, the bid down for a SELL); WRONG if the step back came first.\n- OPENS AGAIN: at the next print with no side at that quote after it has stepped.\n- READS: the prints with no side, the quote at each print, `quote_runs`.\n- BEHIND IT: no count. It asks one question on its own: does a print with no side at the offer behave like a buy.\n  The two lines are NOT changed by it: no side is written into the dipole or the exhaustion."
+}

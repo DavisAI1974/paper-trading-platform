@@ -1,0 +1,9 @@
+{
+  "id": "CL16",
+  "family": "CL",
+  "role": "entry",
+  "reads_unsided_prints": true,
+  "source": "https://github.com/DavisAI1974/markets-data/blob/af2a0efab906302a6302e70c06f108b681d66857/tasks/family-research-20261022/research-union-current/strategy-20261123-claude/VERSIONS.md",
+  "evidence": "https://github.com/DavisAI1974/markets-data/blob/af2a0efab906302a6302e70c06f108b681d66857/tasks/family-research-20261022/research-union-current/strategy-20261123-claude/VERSIONS.md",
+  "specification": "## CL16 (v1, added 2026-11-24). A step of the quote first shown by a print with no side\n\nAdded on Greg's word, 2026-11-24, twentieth session: \"We need to create a strategy for that amd not just a code\nfix\"; \"We can make a 31 trade strategy if needed. The 30 is a jumping off point, not the limit\"; of CL16 and CL17:\n\"Both. If one doesn't cover it all, then 2 works\". Rule 5 of \"what holds for all fifteen\" (a trade the tape gives no\nside for neither opens nor closes anything) holds for CL01 to CL15 and NOT for CL16 and CL17: the print with no\nside is what these two read. Rules 1 to 4 and 6 to 11 hold for them as for the fifteen.\n\n- WHEN: unknown; that is what paper trading is to show.\n- TRIGGER: a print with no side whose own quote shows a step of the best bid or of the best offer (that quote is\n  not where it stood at the print before).\n- DECIDED AT: that print.\n- SIDE: with the step. BUY for a step up. SELL for a step down.\n- CLOSES: at that quote's first step back. RIGHT if that quote stepped further the same way first; WRONG if the\n  step back came first.\n- OPENS AGAIN: at the next such step. The same run of the quote never opens a second trade.\n- READS: the prints with no side, the quote at each print, `quote_runs`.\n- BEHIND IT: no count. Seen on the tastytrade sandbox feed only (6 of 52 and 34 of 149 steps of the quote on the\n  two recordings of 2026-11-23); what followed such a step has not been counted anywhere."
+}
