@@ -164,6 +164,7 @@ def main():
     p.add_argument("--market", default="nymex-ng")
     p.add_argument("--message-budget", type=int, required=True)
     p.add_argument("--event-budget", type=int, required=True)
+    p.add_argument("--execution-plan", type=Path)
     p.add_argument("--greg-go", action="store_true")
     args = p.parse_args()
     if not args.greg_go:
@@ -191,6 +192,7 @@ def main():
             output_budget=args.event_budget,
             market_key=args.market,
             started=started,
+            execution_plan=json.loads(args.execution_plan.read_text()) if args.execution_plan else None,
         )
         pub = Publication(s, url, push_url)
         pending = deque()
@@ -223,7 +225,7 @@ def main():
             while pending:
                 event = pending.popleft()
                 pub.send(event)
-                if event["kind"] == "paper order":
+                if event["kind"] in ("paper order", "fill"):
                     pub.push()
             if time.monotonic() - pub.last_push >= 60:
                 pub.push()

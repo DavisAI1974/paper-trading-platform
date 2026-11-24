@@ -33,7 +33,7 @@ def digest(path):
 class Session:
     def __init__(
         self, data_root, trade_day, *, message_budget, output_budget, market_key="nymex-ng", on_event=None,
-        started=None,
+        started=None, execution_plan=None, captured=None,
     ):
         self.started = time.monotonic() if started is None else started
         self.market = replay_market(market_key)
@@ -55,6 +55,10 @@ class Session:
             raise ValueError("the running rules and calculation code must be committed")
         catalogue_rules = catalogue()
         self.rules = {key: catalogue_rules[key] for key in self.market["rules"]}
+        self.execution = None
+        if execution_plan is not None:
+            from .paper_execution import PaperExecution
+            self.execution = PaperExecution(execution_plan, self.rules, self.write)
         self.rule_commits = {key: self.revision for key in self.rules}
         self.state = "active"
         self.cursor = -1
@@ -78,6 +82,7 @@ class Session:
             code_commit=self.revision,
             order_book={"engine": "NautilusTrader", "version": version("nautilus_trader"), "type": "L3_MBO"},
             inputs=self.feed.sources,
+            execution_plan=execution_plan,
             manifest_sha256=digest(folder / "MANIFEST.json"),
             data_commit=git(self.data_root, "rev-parse", "HEAD"),
             rule_commits=self.rule_commits,
@@ -116,14 +121,17 @@ class Session:
     def record(self, e):
         signal = self.write("signal", **e)
         if e["action"] in ("open", "close", "exit"):
+            order_id = f"{self.run}-{signal['sequence']}"
             self.write(
                 "paper order",
                 **e,
-                order_id=f"{self.run}-{signal['sequence']}",
+                order_id=order_id,
                 signal_sequence=signal["sequence"],
-                pricing="open",
+                pricing="native L3" if self.execution and e["rule"] in self.execution.venues else "open",
                 fill_price=None,
             )
+            if self.execution:
+                self.execution.submit(e, order_id)
 
     def due(self):
         if time.monotonic() - self.started >= LIMIT_SECONDS:
@@ -189,6 +197,8 @@ class Session:
                             return None
                 self.cursor = message["cursor"]
                 self.last = message
+                if self.execution:
+                    self.execution.market(message)
                 self.receives.write(struct.pack("<Q", message["received_by_replay_ns"]))
                 return message if self._apply(self.engine.tick, message) else None
             except Exception:
@@ -203,6 +213,8 @@ class Session:
             try:
                 for e in self.engine.stop(reason):
                     self.record(e)
+                if self.execution and self.last:
+                    self.execution.flatten(self.last, reason, self.run)
                 self.write("status", reason=reason, trade_data=False)
             finally:
                 self.receives.close()
