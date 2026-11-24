@@ -34,22 +34,36 @@ def notify(reason, run):
         raise RuntimeError("phone notice delivery failed")
 
 
+def writer_remote(data_root):
+    urls = git(data_root, "remote", "get-url", "--push", "--all", "origin").splitlines()
+    if len(urls) != 1:
+        raise ValueError("configure a single markets-data push destination")
+    remote = urls[0].lower().removesuffix(".git")
+    if remote == "https://github.com/davisai1974/markets-data":
+        if not os.environ.get("MARKETS_DATA_TOKEN"):
+            raise ValueError("HTTPS publication requires MARKETS_DATA_TOKEN")
+    elif remote != "git@github.com:davisai1974/markets-data":
+        raise ValueError("paper receipts must be pushed to DavisAI1974/markets-data")
+    return urls[0]
+
+
 class Publication:
     """Publish on a dedicated run branch. Stage only the run directory; keep credentials in memory."""
 
-    def __init__(self, session, url):
+    def __init__(self, session, url, push_url):
         self.s = session
         self.url = url
+        self.push_url = push_url
         self.last_push = time.monotonic()
         self.sent = 0
         self.http = requests.Session()
         self.http.headers["Authorization"] = "Bearer " + os.environ["PAPER_RELAY_TOKEN"]
         self.env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
-        if token := os.environ.get("MARKETS_DATA_TOKEN"):
-            basic = base64.b64encode(("x-access-token:" + token).encode()).decode()
+        if push_url.lower().startswith("https://"):
+            basic = base64.b64encode(("x-access-token:" + os.environ["MARKETS_DATA_TOKEN"]).encode()).decode()
             self.env.update(
                 GIT_CONFIG_COUNT="1",
-                GIT_CONFIG_KEY_0="http.https://github.com/.extraheader",
+                GIT_CONFIG_KEY_0=f"http.{push_url}.extraheader",
                 GIT_CONFIG_VALUE_0="AUTHORIZATION: basic " + basic,
             )
         self.branch = "paper-runs/" + session.run
@@ -84,7 +98,7 @@ class Publication:
             "--",
             path,
         )
-        self.command("push", "origin", "HEAD:refs/heads/" + self.branch)
+        self.command("push", self.push_url, "HEAD:refs/heads/" + self.branch)
         self.last_push = time.monotonic()
 
     def send(self, event):
@@ -160,10 +174,10 @@ def main():
     for key in ("PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY", "PAPER_RELAY_TOKEN"):
         if not os.environ.get(key):
             p.error("required run credential missing: " + key)
-    if not os.environ.get("MARKETS_DATA_TOKEN"):
-        push_url = git(args.data, "remote", "get-url", "--push", "origin").lower().removesuffix(".git")
-        if push_url != "git@github.com:davisai1974/markets-data":
-            p.error("configure the markets-data SSH deploy key or MARKETS_DATA_TOKEN")
+    try:
+        push_url = writer_remote(args.data)
+    except ValueError as error:
+        p.error(str(error))
     s = pub = None
     finished = threading.Event()
     alert_sent = threading.Event()
@@ -178,7 +192,7 @@ def main():
             market_key=args.market,
             started=started,
         )
-        pub = Publication(s, url)
+        pub = Publication(s, url, push_url)
         pending = deque()
         s.on_event = pending.append
         with (s.folder / "events.jsonl").open(encoding="utf8") as f:
