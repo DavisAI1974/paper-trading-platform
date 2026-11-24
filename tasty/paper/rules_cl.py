@@ -353,14 +353,16 @@ class CL14(Rule):
                         out += self.close(tid, "the run's first step back", RIGHT)
                     elif f['fact'] == FURTHER:
                         out += self.close(tid, "the run's next step the same way", WRONG)
+        # The quote a print carries stood BEFORE its trade (on both 7e recordings every sell but one printed at its
+        # own bid and every buy at its own ask), so a step this print's own quote shows came before this print's
+        # trade: this print can be the first sell (or buy) since that step. Step 0 of 2026-11-24 found the earlier
+        # code passed that print over and opened on the SECOND one.
         for f in snap.run_facts:
-            if not f['here']:
-                self._apply(f)
-        moved = {f['quote'] for f in snap.run_facts if f['here'] and f['fact'] in MOVES}
+            self._apply(f)
         p = snap.print
         for q, want_dir, want_side, trade_side, own in ((BID, 'up', 'S', SELL, p.bid), (ASK, 'down', 'B', BUY, p.offer)):
             st = self.st[q]
-            if p.side != want_side or q in moved or st is None or st['dir'] != want_dir or st['seen']:
+            if p.side != want_side or st is None or st['dir'] != want_dir or st['seen']:
                 continue
             st['seen'] = True                         # the first such print since the latest step
             if p.price != st['level']:
@@ -377,9 +379,6 @@ class CL14(Rule):
             out += self.open(trade_side, ('level', q, st['run'], st['moves']),
                              dict(quote=q, level=st['level'], run_start_position=st['run']),
                              run=(q, st['run']))
-        for f in snap.run_facts:
-            if f['here']:
-                self._apply(f)
         return out
 
 

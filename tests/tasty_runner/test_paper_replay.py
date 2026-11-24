@@ -110,3 +110,45 @@ def test_quote_read_by_rules_never_from_a_quote_event(recording):
             eng2.on_event(e)
     assert _dump(with_quotes.ledger.events) == _dump(eng2.ledger.events)
     assert eng.quotes.n_quote_messages == len(quote_places)
+
+
+def _raw_prints(path):
+    out = []
+    for line in open(path, encoding='utf-8'):
+        o = json.loads(line)
+        if o.get('kind') != 'received':
+            continue
+        try:
+            frame = json.loads(o['raw'])
+        except (TypeError, ValueError):
+            continue
+        if isinstance(frame, dict) and frame.get('type') == 'FEED_DATA':
+            out += [((int(o['msg_no']), k), e) for k, e in enumerate(frame['data'])
+                    if e.get('eventType') == 'TimeAndSale']
+    return out
+
+
+def test_cl14_opens_on_the_first_print_of_the_other_side_since_the_step(recording):
+    """CL14's text: the FIRST sell since the best bid's latest step up prints at the level that step made (mirror:
+    the first buy since the best offer's latest step down). Checked from the raw messages, not from the engine's
+    own facts: between the print whose quote first shows that level and the opening print there is no earlier
+    print of that side."""
+    raw = _raw_prints(recording)
+    at = {place: i for i, (place, _) in enumerate(raw)}
+    opens = [e for e in run(recording).ledger.events if e['event'] == 'open' and e['strategy'] == 'CL14']
+    assert opens, 'CL14 opened nothing on the recording: the check would prove nothing'
+    for e in opens:
+        i = at[tuple(e['at']['place'])]
+        side, field = ('SELL', 'bidPrice') if e['side'] == 'SELL' else ('BUY', 'askPrice')
+        level = raw[i][1][field]
+        assert raw[i][1]['aggressorSide'] == side and raw[i][1]['price'] == level
+        j = i
+        while j > 0 and raw[j - 1][1][field] == level:
+            j -= 1                                    # j: the print whose own quote first shows the level
+        assert j > 0, 'the level stood from the first print: there is no step to read'
+        if e['side'] == 'SELL':
+            assert raw[j - 1][1][field] < level       # the bid stepped up to it
+        else:
+            assert raw[j - 1][1][field] > level       # the offer stepped down to it
+        earlier = [raw[k][0] for k in range(j, i) if raw[k][1].get('aggressorSide') == side]
+        assert not earlier, f'{e["trade_id"]} opened at {raw[i][0]} but {earlier[0]} was the first {side} since the step'
