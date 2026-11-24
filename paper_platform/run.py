@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 import requests
 from .api import wire
 from .causal_gate import PreflightDeadline
-from .session import Session
+from .session import Session, git
 from root.calendar import trade_day_bounds
 
 
@@ -44,14 +44,14 @@ class Publication:
         self.sent = 0
         self.http = requests.Session()
         self.http.headers["Authorization"] = "Bearer " + os.environ["PAPER_RELAY_TOKEN"]
-        token = base64.b64encode(("x-access-token:" + os.environ["MARKETS_DATA_TOKEN"]).encode()).decode()
-        self.env = dict(
-            os.environ,
-            GIT_CONFIG_COUNT="1",
-            GIT_CONFIG_KEY_0="http.https://github.com/.extraheader",
-            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic " + token,
-            GIT_TERMINAL_PROMPT="0",
-        )
+        self.env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+        if token := os.environ.get("MARKETS_DATA_TOKEN"):
+            basic = base64.b64encode(("x-access-token:" + token).encode()).decode()
+            self.env.update(
+                GIT_CONFIG_COUNT="1",
+                GIT_CONFIG_KEY_0="http.https://github.com/.extraheader",
+                GIT_CONFIG_VALUE_0="AUTHORIZATION: basic " + basic,
+            )
         self.branch = "paper-runs/" + session.run
 
     def command(self, *args):
@@ -157,9 +157,13 @@ def main():
     url = os.environ["PAPER_RELAY_URL"].rstrip("/")
     if urlsplit(url).scheme != "https" or not urlsplit(url).hostname or urlsplit(url).username:
         p.error("Render must use an HTTPS URL")
-    for key in ("PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY", "PAPER_RELAY_TOKEN", "MARKETS_DATA_TOKEN"):
+    for key in ("PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY", "PAPER_RELAY_TOKEN"):
         if not os.environ.get(key):
             p.error("required run credential missing: " + key)
+    if not os.environ.get("MARKETS_DATA_TOKEN"):
+        push_url = git(args.data, "remote", "get-url", "--push", "origin").lower().removesuffix(".git")
+        if push_url != "git@github.com:davisai1974/markets-data":
+            p.error("configure the markets-data SSH deploy key or MARKETS_DATA_TOKEN")
     s = pub = None
     finished = threading.Event()
     alert_sent = threading.Event()
