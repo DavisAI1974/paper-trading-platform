@@ -40,6 +40,8 @@
 
 - [ ] **6.** The exact order book kept for the whole week, seated at the exchange's Sunday start-up, carried straight through. Never restarted at midnight UTC. DECIDED
 
+  **Built in draft.** Archive and captured replay both preserve one Sunday-seated book. The receipt now records the source of the first real row on each UTC receive date and the pre-row fingerprint of resting orders in queue order, including their IDs, prices, sizes and placement positions. A full live-week record remains outstanding.
+
   **In progress.** Main seats the book on Sunday and checks the next UTC restatement. The existing purchased-data evidence covers four trade days. A record of one uninterrupted live week, including its UTC midnight boundaries, is outstanding.
 
 - [ ] **7.** Everything the feed sends is recorded whole, as it arrives, with our receive time in nanoseconds. Raw, nothing dropped. DECIDED

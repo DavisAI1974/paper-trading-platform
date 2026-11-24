@@ -72,6 +72,7 @@ class Session:
         }
         self.state = "active"
         self.cursor = -1
+        self.weekly_book_boundaries = []
         self.events = 0
         self.last = None
         self.message_budget = message_budget
@@ -281,6 +282,8 @@ class Session:
                 self.timers_after_input.clear()
                 self.cursor = message["cursor"]
                 self.last = message
+                if "weekly_book_boundary" in message:
+                    self.weekly_book_boundaries.append(message["weekly_book_boundary"])
                 if self.captured:
                     self.capture_frame_hash.update(bytes.fromhex(message["source_sha256"]))
                 self.receives.write(struct.pack("<Q", message["received_by_capture_ns" if self.captured else "received_by_replay_ns"]))
@@ -382,6 +385,7 @@ class Session:
                     first_live_decision_cursor=self.first_live_decision_cursor, shutdown=self.shutdown_evidence,
                     remaining_paper_inventory=self._paper_inventory(), last_source=self.last_source(),
                     capture_end=self.capture_end,
+                    weekly_book_boundaries=self.weekly_book_boundaries,
                 )
                 if self.captured:
                     receipt["timers_after_last_input_ns"] = self.timers_after_input

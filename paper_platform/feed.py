@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
+import hashlib
 from pathlib import Path
+import struct
 import time
 
 from root import tape
@@ -21,16 +23,35 @@ class MboTape:
         self.flags = tape.flag_bits()
         self.position = self.event_start = self.cursor = 0
         self.opens, self.halts = trade_day_bounds(trade_day)
+        self.utc_day = None
+
+    def boundary(self, fields, source, index):
+        day = fields["ts_recv"] // 86_400_000_000_000
+        if day == self.utc_day:
+            return None
+        digest = hashlib.sha256()
+        for side in (BID, ASK):
+            levels = self.book.sides[side]
+            for price in levels.prices:
+                for order in levels.lines[price].orders.values():
+                    digest.update(struct.pack("<cqQIQ", side, price, order.id, order.size, order.placed_pos))
+        self.utc_day = day
+        return dict(utc_date=datetime.fromtimestamp(day * 86400, timezone.utc).date().isoformat(),
+                    position=self.position, source=[source, index], instrument_id=fields["instrument_id"],
+                    exchange_action=fields["action"].decode("ascii"), orders_before=len(self.book.orders),
+                    queue_sha256_before=digest.hexdigest())
 
     def apply(self, fields, *, source_sha256, index, local_ns, snapshot=False):
         exchange, received = fields["ts_event"], fields["ts_recv"]
         eligible = not snapshot and self.opens <= exchange < self.halts
         order_change = None
         entered_levels = {}
+        boundary = None
         if snapshot:
             period, named = tape.VENDOR_SNAPSHOT, None
             tick_position = group = None
         else:
+            boundary = self.boundary(fields, source_sha256, index)
             period, named = label(exchange)
             tick_position, group = self.position, self.event_start
             oid = fields["order_id"]
@@ -81,6 +102,8 @@ class MboTape:
             best_ask=self.book.best(ASK),
         )
         self.cursor += 1
+        if boundary is not None:
+            message["weekly_book_boundary"] = boundary
         return message
 
 
