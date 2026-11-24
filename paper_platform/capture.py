@@ -23,6 +23,16 @@ MBO_FIELDS = ("length", "rtype", "publisher_id", "instrument_id", "ts_event", "o
               "ts_in_delta", "sequence")
 
 
+class CaptureFailure(RuntimeError):
+    """A recorder stop reason suitable for operator notices and durable metadata."""
+
+
+class CaptureEnded(RuntimeError):
+    def __init__(self, evidence):
+        self.evidence = evidence
+        super().__init__("capture: " + evidence["status"])
+
+
 class Capture:
     def __init__(self, db, connection_id):
         self.db = db
@@ -51,13 +61,13 @@ class Capture:
             )
         self.deliveries += 1
         if mismatch:
-            raise ValueError(f"replayed MBO differs at position {self.position}")
+            raise CaptureFailure(f"replayed MBO differs at position {self.position}")
         if pos is not None or replay is not None:
             self.position += 1
 
     def require_prefix(self):
         if self.position < self.prior:
-            raise ValueError(f"source ended before the stored prefix at position {self.position}")
+            raise CaptureFailure(f"source ended before the stored prefix at position {self.position}")
 
 
 @contextmanager
@@ -81,6 +91,7 @@ def capture_writer(path, identity):
                     id INTEGER PRIMARY KEY, connection_id INTEGER NOT NULL, received_ns INTEGER NOT NULL,
                     kind TEXT NOT NULL, body BLOB NOT NULL, position INTEGER UNIQUE, replay_of INTEGER
                 );
+                CREATE INDEX IF NOT EXISTS frames_by_connection ON frames(connection_id, id);
             """)
             with db:
                 db.execute("INSERT OR IGNORE INTO source VALUES(1,?)", (identity,))
@@ -97,6 +108,9 @@ def capture_writer(path, identity):
                 yield writer
                 writer.require_prefix()
                 status = writer.status
+            except CaptureFailure as exc:
+                status = str(exc)
+                raise
             finally:
                 with db:
                     db.execute("UPDATE connections SET ended_ns=?, status=? WHERE id=?",
@@ -108,9 +122,10 @@ def capture_writer(path, identity):
 class CapturedFeed:
     """Read or tail the durable MBO positions with the same book logic as purchased replay."""
 
-    def __init__(self, path, trade_day):
+    def __init__(self, path, trade_day, connection_id=None):
         self.path = Path(path)
         self.trade_day = trade_day
+        self.connection_id = connection_id
 
     def messages(self, *, follow=False, poll=False):
         uri = self.path.resolve().as_uri() + "?mode=ro"
@@ -130,26 +145,61 @@ class CapturedFeed:
                     (position,),
                 ).fetchall()
                 live_start = None
-                if follow and identity["source"] == "live":
-                    live_start = db.execute("SELECT position FROM live_starts WHERE connection_id="
-                                            "(SELECT MAX(id) FROM connections)").fetchone()
-                state = db.execute("SELECT status FROM connections ORDER BY id DESC LIMIT 1").fetchone()
+                terminal = None
+                if follow:
+                    if self.connection_id is None:
+                        row = db.execute("SELECT MAX(id) FROM connections").fetchone()
+                        self.connection_id = row[0]
+                    connection = db.execute("SELECT opened_ns,ended_ns,status FROM connections WHERE id=?",
+                                            (self.connection_id,)).fetchone()
+                    if connection is None:
+                        raise CaptureFailure("capture connection unavailable")
+                    opened, ended, status = connection
+                    if identity["source"] == "live":
+                        live_start = db.execute("SELECT position FROM live_starts WHERE connection_id=?",
+                                                (self.connection_id,)).fetchone()
+                    if status == "recording":
+                        # A hard writer exit releases its lock, even before SQLite records an end time.
+                        with self.path.with_suffix(".lock").open("rb") as lock:
+                            try:
+                                fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                            except BlockingIOError:
+                                pass
+                            else:
+                                # Start a new snapshot to include the writer's final commit.
+                                db.commit()
+                                db.execute("BEGIN")
+                                _, ended, status = db.execute(
+                                    "SELECT opened_ns,ended_ns,status FROM connections WHERE id=?",
+                                    (self.connection_id,),
+                                ).fetchone()
+                                if status == "recording":
+                                    status = "recorder exited without a terminal record"
+                                if identity["source"] != "live":
+                                    batch = db.execute(
+                                        "SELECT position,body,received_ns FROM frames WHERE position>=? "
+                                        "ORDER BY position LIMIT 512", (position,),
+                                    ).fetchall()
+                    if status != "recording" and (identity["source"] == "live" or not batch):
+                        last = db.execute("SELECT id,received_ns FROM frames WHERE connection_id=? "
+                                          "ORDER BY id DESC LIMIT 1", (self.connection_id,)).fetchone()
+                        last_mbo = db.execute(
+                            "SELECT coalesce(position,replay_of) FROM frames WHERE connection_id=? "
+                            "AND (position IS NOT NULL OR replay_of IS NOT NULL) ORDER BY id DESC LIMIT 1",
+                            (self.connection_id,),
+                        ).fetchone()
+                        terminal = dict(connection_id=self.connection_id, status=status, opened_ns=opened,
+                                        ended_ns=ended, last_delivery_id=last[0] if last else None,
+                                        last_received_ns=last[1] if last else None,
+                                        last_mbo_position=last_mbo[0] if last_mbo else None)
                 db.commit()
+                if terminal is not None:
+                    if poll:
+                        yield {"capture_end": terminal}
+                    return
                 if not batch:
-                    if not follow or not state or state[0] != "recording":
+                    if not follow:
                         return
-                    # The OS releases the lock even if a writer dies before marking its status.
-                    with self.path.with_suffix(".lock").open("rb") as lock:
-                        try:
-                            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
-                        except BlockingIOError:
-                            pass
-                        else:
-                            # A final batch may have committed after our snapshot.
-                            last = db.execute("SELECT MAX(position) FROM frames").fetchone()[0]
-                            if last is None or last < position:
-                                return
-                            continue
                     if poll:
                         yield {"idle": True}
                     else:
@@ -198,6 +248,8 @@ def capture_preflight(feed, rules, deadline, *, minimum=4096):
     for message in feed.messages(follow=True, poll=True):
         if time.monotonic() >= deadline:
             raise PreflightDeadline("5.75-hour budget reached during capture preflight")
+        if "capture_end" in message:
+            raise CaptureEnded(message["capture_end"])
         if message.get("idle"):
             time.sleep(0.1)
             continue
