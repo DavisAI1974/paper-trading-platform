@@ -111,7 +111,7 @@ class CapturedFeed:
         self.path = Path(path)
         self.trade_day = trade_day
 
-    def messages(self, *, follow=False):
+    def messages(self, *, follow=False, poll=False):
         uri = self.path.resolve().as_uri() + "?mode=ro"
         db = sqlite3.connect(uri, uri=True)
         stream = instrument = None
@@ -145,7 +145,10 @@ class CapturedFeed:
                             if last is None or last < position:
                                 return
                             continue
-                    time.sleep(0.1)
+                    if poll:
+                        yield {"idle": True}
+                    else:
+                        time.sleep(0.1)
                     continue
                 for index, body, received_ns in batch:
                     fields = dict(zip(MBO_FIELDS, MBO.unpack(body), strict=True))
@@ -166,3 +169,56 @@ class CapturedFeed:
                     position += 1
         finally:
             db.close()
+
+
+def capture_preflight(feed, rules, deadline, *, minimum=4096):
+    """Compare decisions on the collected prefix with a physically shortened copy."""
+    from tempfile import TemporaryDirectory
+    from .causal_gate import PreflightDeadline
+    from .engine import Engine
+
+    engine = Engine(feed.trade_day, "capture-cutoff", rules)
+    expected = hashlib.sha256()
+    count = eligible = opens = 0
+    cutoff = None
+    def record(digest, machine, message):
+        decisions = machine.tick(message)
+        if decisions:
+            digest.update(json.dumps([message["cursor"], decisions], sort_keys=True,
+                                     separators=(",", ":")).encode() + b"\n")
+        return decisions
+
+    for message in feed.messages(follow=True, poll=True):
+        if time.monotonic() >= deadline:
+            raise PreflightDeadline("5.75-hour budget reached during capture preflight")
+        if message.get("idle"):
+            time.sleep(0.1)
+            continue
+        if cutoff is not None:
+            break  # One further input exists and is withheld from the physical copy.
+        decisions = record(expected, engine, message)
+        count += len(decisions)
+        opens += sum(d["action"] == "open" for d in decisions)
+        eligible += int(message["in_session"])
+        if eligible >= minimum and opens:
+            cutoff = {k: message[k] for k in ("cursor", "source_sha256", "record_index")}
+    else:
+        raise ValueError("capture ended before a causal prefix and suffix were available")
+    actual = hashlib.sha256()
+    with TemporaryDirectory() as tmp:
+        short = Path(tmp) / "cut.sqlite"
+        with sqlite3.connect(short) as db:
+            db.execute("ATTACH DATABASE ? AS original", (feed.path.as_uri() + "?mode=ro",))
+            db.execute("CREATE TABLE source AS SELECT * FROM original.source")
+            db.execute("CREATE TABLE connections AS SELECT * FROM original.connections")
+            db.execute("CREATE TABLE frames AS SELECT position,body,received_ns FROM original.frames "
+                       "WHERE position BETWEEN 0 AND ?", (cutoff["record_index"],))
+            db.execute("CREATE UNIQUE INDEX tape_order ON frames(position)")
+        machine = Engine(feed.trade_day, "capture-cutoff", rules)
+        for message in CapturedFeed(short, feed.trade_day).messages():
+            if time.monotonic() >= deadline:
+                raise PreflightDeadline("5.75-hour budget reached during capture preflight")
+            record(actual, machine, message)
+    if actual.digest() != expected.digest():
+        raise ValueError("captured tape cutoff changed strategy decisions")
+    return dict(status="passed", cutoff=cutoff, decisions=count, decisions_sha256=actual.hexdigest())

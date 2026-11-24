@@ -68,9 +68,20 @@ class Session:
         self.output_budget = output_budget
         self.engine = Engine(trade_day, self.run, self.rules)
         folder = self.data_root / self.market["archive"]
-        self.feed = HistoricalFeed(folder, trade_day, market_key)
-        causal_check = check_prefix(self.feed, self.rules, self.started + LIMIT_SECONDS)
-        self.stream = self.feed.messages()
+        self.captured = captured is not None
+        if self.captured:
+            from .capture import CapturedFeed, capture_preflight
+            path = Path(captured).resolve()
+            relative = path.relative_to(self.data_root / "paper-trading" / "captures")
+            self.feed = CapturedFeed(path, trade_day)
+            causal_check = capture_preflight(self.feed, self.rules, self.started + LIMIT_SECONDS)
+            self.stream = self.feed.messages(follow=True, poll=True)
+            sources = [dict(capture=relative.as_posix(), reference="frame SHA-256 and tape position")]
+        else:
+            self.feed = HistoricalFeed(folder, trade_day, market_key)
+            causal_check = check_prefix(self.feed, self.rules, self.started + LIMIT_SECONDS)
+            self.stream = self.feed.messages()
+            sources = self.feed.sources
         self.folder = self.data_root / "paper-trading" / self.run
         self.folder.mkdir(parents=True, exist_ok=False)
         self.journal = (self.folder / "events.jsonl").open("x", encoding="utf8", newline="\n")
@@ -81,9 +92,9 @@ class Session:
             trade_day=trade_day.isoformat(),
             code_commit=self.revision,
             order_book={"engine": "NautilusTrader", "version": version("nautilus_trader"), "type": "L3_MBO"},
-            inputs=self.feed.sources,
+            inputs=sources,
             execution_plan=execution_plan,
-            manifest_sha256=digest(folder / "MANIFEST.json"),
+            manifest_sha256=None if self.captured else digest(folder / "MANIFEST.json"),
             data_commit=git(self.data_root, "rev-parse", "HEAD"),
             rule_commits=self.rule_commits,
             rule_files={k: digest(RULES / (k + ".json")) for k in self.rules},
@@ -187,7 +198,9 @@ class Session:
             try:
                 message = next(self.stream, None)
                 if message is None:
-                    self.stop("end of purchased input")
+                    self.stop("end of capture" if self.captured else "end of purchased input")
+                    return None
+                if message.get("idle"):
                     return None
                 if message["period"] != "vendor snapshot":
                     received = message["raw"]["ts_recv"]
@@ -199,7 +212,7 @@ class Session:
                 self.last = message
                 if self.execution:
                     self.execution.market(message)
-                self.receives.write(struct.pack("<Q", message["received_by_replay_ns"]))
+                self.receives.write(struct.pack("<Q", message["received_by_capture_ns" if self.captured else "received_by_replay_ns"]))
                 return message if self._apply(self.engine.tick, message) else None
             except Exception:
                 self.stop("failure")
