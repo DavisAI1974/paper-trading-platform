@@ -52,6 +52,10 @@ class MboTape:
             tick_position = group = None
         else:
             boundary = self.boundary(fields, source_sha256, index)
+            if boundary is not None and boundary["position"]:
+                # The native mirror is checked against the carried book at every UTC date change. A captured
+                # or live stream brings no vendor restatement to check it against, so this is its only check.
+                self.book.verify_queues(f"UTC {boundary['utc_date']}")
             period, named = label(exchange)
             tick_position, group = self.position, self.event_start
             oid = fields["order_id"]
