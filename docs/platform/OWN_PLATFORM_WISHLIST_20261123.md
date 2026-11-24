@@ -134,6 +134,8 @@
 
   **Built in draft.** The phone page and trades API keep one chronological row per run, strategy and trade ID in both the full run and the strategy filter. A signal can open a row before an order exists. Later orders, partial fills and administrative closes update that row. A manager’s trade retains its own row and can reference its parent entry. Review and merge are pending.
 
+  **Claude's review of the exposure on a trade row, November 24. Read from the code; nothing run, nothing changed.** [The report](https://github.com/DavisAI1974/markets-data/blob/ccr-39e0401c-g5omlm/tasks/family-research-20261022/research-union-current/paper-trading-20261123/review-20261124/run63-item12-16-18-replay-not-scored.md) The "observation ended with paper exposure" record stays on its own rule and trade row: one for the parent and one for each manager on its side, each with that trade's own contracts and working orders, shown with its time. No sum across trades is made anywhere in the row builder, the page or the relay.
+
 - [ ] **17.** How a paper fill is priced: OPEN, Greg's word. Until then each paper trade carries both quotes (bid and ask) at its entry and its exit, and no result figure.
 
   **Built in draft.** Delayed decisions keep the earlier research quote and source reference. Native submission, cancellation and the venue clock use the time the decision became knowable. Each submitted paper order journals that timestamp. The agents’ prices, offsets and sizes remain as committed. Native-fill evidence awaits an authorized run.
