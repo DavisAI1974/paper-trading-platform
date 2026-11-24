@@ -154,8 +154,19 @@ class FileAnswers:
         self.path = os.fspath(path)
         self.offset = 0
         self.lines = 0
+        self.unreadable = False
 
     def take(self, tape_ns=None):
+        if self.unreadable:
+            return []
+        try:
+            return self._take()
+        except OSError as error:
+            # Reported once, as a row the session journals; after that this source hands over nothing.
+            self.unreadable = True
+            return [{"_malformed": f"unreadable: {type(error).__name__}: {error}", "line": ""}]
+
+    def _take(self):
         try:
             size = os.stat(self.path).st_size
         except FileNotFoundError:
@@ -217,7 +228,7 @@ class TimedAnswers:
             if reason is not None:
                 return reason
             if "not_before_tape_ns" not in answer:
-                return f"answer {answer['id']!r} has no not_before_tape_ns, which a trial needs"
+                return f"answer {answer.get('id')!r} has no not_before_tape_ns, which a trial needs"
         return None
 
     def take(self, tape_ns=None):
@@ -225,6 +236,11 @@ class TimedAnswers:
         out = []
         while self.held:
             head = self.held[0]
+            if isinstance(head, dict) and "_malformed" not in head and "not_before_tape_ns" not in head:
+                # Appended during the trial without its time: handed over to be journaled, never applied.
+                out.append({"_malformed": "no not_before_tape_ns", "line": json.dumps(head, sort_keys=True)})
+                self.held.pop(0)
+                continue
             when = head.get("not_before_tape_ns")
             if tape_ns is None or (_whole(when) and when > tape_ns):
                 break

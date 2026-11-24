@@ -372,22 +372,44 @@ class Session:
         """Take the waiting answers, in the order they arrived, before this message is applied.
 
         Each is a journal row of kind `answer` at the message's receive time. It changes only what comes after
-        its row. The wall clock is not read here.
+        its row. The wall clock is not read here. Nothing that goes wrong with an answer stops the run: it is
+        journaled as an answer row with `applied: false` and the exception's text.
         """
-        for answer in self.answers.take(tape_ns):
-            self.answers_taken += 1
-            self.answers_hash.update(json.dumps(answer, sort_keys=True, separators=(",", ":")).encode() + b"\n")
-            reason = self._answer_refusal(answer)
-            if isinstance(answer, dict) and isinstance(answer.get("id"), str):
-                self.answers_seen.add(answer["id"])
-            if reason is None:
-                self.answers_applied += 1
-            row = dict(answer=answer, tape_received_ns=tape_ns, applied=reason is None)
-            if reason is not None:
-                row["reason"] = reason
-            self.write("answer", **row)
-            if reason is None:
-                self._apply_answer(answer)
+        try:
+            taken = self.answers.take(tape_ns)
+        except Exception as error:
+            self._answer_failed(None, tape_ns, "the answers source raised", error)
+            return
+        for answer in taken:
+            written = False
+            try:
+                self.answers_taken += 1
+                self.answers_hash.update(
+                    json.dumps(answer, sort_keys=True, separators=(",", ":"), default=str).encode() + b"\n")
+                reason = self._answer_refusal(answer)
+                if isinstance(answer, dict) and isinstance(answer.get("id"), str):
+                    self.answers_seen.add(answer["id"])
+                if reason is None:
+                    self.answers_applied += 1
+                row = dict(answer=answer, tape_received_ns=tape_ns, applied=reason is None)
+                if reason is not None:
+                    row["reason"] = reason
+                written = self.write("answer", **row)
+                if reason is None:
+                    self._apply_answer(answer, written)
+            except Exception as error:
+                if written:
+                    self.answers_applied -= 1  # the row above says applied; the next row says it failed
+                self._answer_failed(answer, tape_ns, "applying the answer failed" if written else "the answer failed",
+                                    error)
+
+    def _answer_failed(self, answer, tape_ns, what, error):
+        text = f"{what}: {type(error).__name__}: {error}"
+        try:
+            self.write("answer", answer=answer if isinstance(answer, dict) else None, tape_received_ns=tape_ns,
+                       applied=False, reason=text)
+        except TypeError:
+            self.write("answer", answer=None, tape_received_ns=tape_ns, applied=False, reason=text)
 
     def _ask_decider(self, signal, e):
         """Journal the question, block on the decider, journal its answer. True only on a take."""
@@ -399,7 +421,7 @@ class Session:
         self.decided["asked"] += 1
         started = time.monotonic_ns()
         try:
-            given = self.decider.ask(question)
+            given = json.loads(json.dumps(self.decider.ask(question)))  # whatever it returns must be one JSON value
             failure = None
         except Exception as error:
             given, failure = None, f"the decider raised {type(error).__name__}"
@@ -433,21 +455,14 @@ class Session:
         reason = validate(answer)
         if reason is not None:
             return "malformed: " + reason
-        if answer["id"] in self.answers_seen:
+        if answer.get("id") in self.answers_seen:
             return "an answer with this id was already taken"
         if answer["action"] in ("take", "skip"):
             return "take and skip answer a question put to the decider; they are not taken from a file"
         if answer["action"] == "close":
-            idea = self.engine.open.get(answer["trade_id"])
-            if idea is None:
-                return "the trade is not open"
-            if answer.get("rule", idea["rule"]) != idea["rule"]:
-                return "the trade belongs to another rule"
-            if not self._orders_for(idea["rule"]):
-                return "the plan sends no orders for this rule"
             if not self.answer_close:
                 return ("the hold rule in force is the give-back exit; closing by answer is not switched on")
-            return None
+            return self._close_refusal(answer)[0]
         rule = answer["rule"]
         if rule not in self.rules:
             return "unknown rule"
@@ -457,15 +472,34 @@ class Session:
             return "the rule is already " + ("off" if rule in self.answers_off else "on")
         return None
 
-    def _apply_answer(self, answer):
+    def _close_refusal(self, answer):
+        """(reason or None, the venue's rule, held contracts). A close answer closes the paper trade only."""
+        if self.execution is None:
+            return "the trade holds no paper contract", None, 0
+        trade = answer["trade_id"]
+        for rule, venue in self.execution.venues.items():
+            if answer.get("rule", rule) == rule and venue.inventory.get(trade):
+                if self.engine.last is None or self.engine.last["settlement"]:
+                    return "inside the settle window", None, 0
+                if venue.active_orders.get(trade):
+                    return "an order for this trade is still working", None, 0
+                return None, rule, venue.inventory[trade]
+        return "the trade holds no paper contract", None, 0
+
+    def _apply_answer(self, answer, row):
         if answer["action"] == "rule_off":
             self.answers_off.add(answer["rule"])
         elif answer["action"] == "rule_on":
             self.answers_off.discard(answer["rule"])
         else:
-            # The trade is closed with its rule's own closing instruction, on the last quote the session knows.
-            event = self.engine.close_trade(answer["trade_id"], "answer " + answer["id"], self.engine.last)
-            self.record(dict(event, answer_id=answer["id"]))
+            # Closes the paper position only, through the matcher, on the last quote the session knows. The
+            # engine is not touched: the rule's research idea lives on and its own close is journaled as ever.
+            # No `signal` row is written, so nothing reads this as the rule's own close.
+            _, rule, held = self._close_refusal(answer)
+            event = self.engine.event(rule, "close", "answer " + answer["id"], self.engine.last, answer["trade_id"],
+                                      side="buy" if held > 0 else "sell", trade_data=True, answer_id=answer["id"],
+                                      answer_sequence=row["sequence"])
+            self.execution.submit(event, f"{self.run}-answer-{row['sequence']}")
 
     def answers_receipt(self):
         if self.answers is None and self.decider is None:
