@@ -87,7 +87,38 @@ line here is a result.
    read from the sequence number, the handling of prints with no side in the fifteen, and the six rules that
    cannot run. The rules themselves take plain events and know nothing of tastytrade, so they carry over.
 
+8. 2026-11-24, Claude, from the first run with orders. THE SANDBOX REFUSES EVERY BUY WHILE THE ACCOUNT IS SHORT. Its
+   dry run answers HTTP 422 `illegal_buy_and_sell_on_same_symbol` ("Cannot buy and sell against the same symbol").
+   After the first sell filled, no buy got through: 26 refused in the first four minutes. So the one account can
+   only go one way, every strategy's buy (an open, or the close of a sell) is lost, and the flatten is at risk too.
+   Not yet known: whether it is the short position itself, a sell order whose status stays "Live" after its fill,
+   or the action word ("Buy" where the sandbox wants a closing action). One account netting all the strategies
+   does not work on this sandbox as built.
+9. 2026-11-24, Claude, same run. THE SANDBOX DOES NOT FILL FROM THE FEED WE TRADE FROM. Six sells filled at 3.547 and
+   3.548 while the print that triggered each showed a bid of 3.536 to 3.542. The stream is 900 seconds behind; the
+   fills look like the market as it is now. A rule decides on a 15-minute-old quote and is filled on today's.
+   The comparison against the feed 15 minutes later is to be made from the run's own feed record.
+10. 2026-11-24, Claude, same run. THE SANDBOX THROWS SERVER ERRORS OFTEN (HTTP 500): in the first four minutes 14 on
+    dry runs, 6 on the live-orders read, 3 on order reads and 5 on SUBMITS. A submit answered with a 500 is not
+    re-sent (as built) and the look-up did not find it, so that trade never opened. The retries on reads and dry
+    runs each delay the orders queued behind them.
+11. 2026-11-24, Claude, same run. An order's status still reads "Live" after its fill is recorded (seen again on
+    2208125 and 2208127). The runner reads fills, so it was not misled.
+12. 2026-11-24, reviewer agent. NOT FIXED YET in the order path: a second Ctrl-C during the flatten can lose the
+    flatten's record and the receipt; nothing stamps how late an order goes out after its signal; the lock made
+    for the counts is never used (each count is written by one thread only).
+13. 2026-11-24, Claude. FOUND ON THE REAL RECORDS: the sandbox's "live orders" list also holds the day's filled and
+    cancelled orders. The start check and the flatten now count only an order that is not terminal and not fully
+    filled. Fixed before the first run (`ef58c85`).
+
 ## D. Runs
+
+1. 2026-11-23 evening (trade day Tue Nov 24, 2026), started 8:05 pm Eastern. THE FIRST RUN WITH ORDERS, on Greg's
+   go ("Just do run 2 with trades"): the live sandbox feed, all 32 strategies, 1 lot a trade, at most 20 orders,
+   account 5WY79188, code `ef58c85`. STILL RUNNING when this line was written. After four minutes: 11 submits, all
+   sells; 6 filled, 5 answered with a server error and not found afterwards; 45 intended orders not sent (26 buys
+   refused by the sandbox, the rest stopped at a failed dry run). What it showed so far is C8 to C11 above.
+   Record: DATA `paper-trading-20261123/live-runs/orders-20261124T010517Z/`. Not scored.
 
 (Each live run is added here when it has been made: the date, how long, how many orders, where its record is, and
 the gaps and misses it showed. Each of those also gets its own line in section A, B or C.)
