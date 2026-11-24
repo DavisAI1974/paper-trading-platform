@@ -168,6 +168,9 @@ class Session:
 
     def record(self, e):
         signal = self.write("signal", **e)
+        if (self.execution and e.get("trade_data") is False and e.get("trade_id")
+                and e["action"] in ("not scored", "observation interrupted") and not e.get("management_only")):
+            self.execution.record_interruption(dict(e, signal_sequence=signal["sequence"]))
         if not self.liquidation_available or e["action"] not in ("open", "close", "exit"):
             return
         sequence = signal["sequence"]

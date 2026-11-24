@@ -265,6 +265,26 @@ class PaperExecution:
                        trade_id=f"{signal['trade_id']}/{manager}", management_only=True,
                        reason=f"{parent}: {signal['reason']}")
 
+    def record_interruption(self, signal):
+        """Keep the native exposure identifiable when a parent's research observation ends."""
+        parent, key = signal["rule"], signal["trade_id"]
+        positions = [(parent, key)]
+        positions.extend((manager, f"{key}/{manager}") for manager in self.followers.get(parent, ())
+                         if self.rules[manager]["direction"] == signal["side"])
+        for rule, trade in positions:
+            venue = self.venues.get(rule)
+            if venue is None:
+                continue
+            held = venue.inventory.get(trade, 0)
+            working = sorted(venue.active_orders.get(trade, ()))
+            if not held and not working:
+                continue
+            details = dict(signal, rule=rule, trade_id=trade,
+                           remaining_contracts=held, working_order_ids=working)
+            if rule != parent:
+                details.update(entry_rule=parent, source_trade_id=key, management_only=True)
+            venue.emit("order status", **details, execution_event="observation ended with paper exposure")
+
     def submit(self, event, order_id):
         rule = event["rule"]
         policy = self.policies[rule]
