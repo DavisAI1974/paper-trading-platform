@@ -76,6 +76,10 @@ class Session:
             self.feed = CapturedFeed(path, trade_day)
             causal_check = capture_preflight(self.feed, self.rules, self.started + LIMIT_SECONDS)
             self.stream = self.feed.messages(follow=True, poll=True)
+            import sqlite3
+            from contextlib import closing
+            with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as db:
+                self.warm_through = db.execute("SELECT COALESCE(MAX(position),-1) FROM frames").fetchone()[0]
             sources = [dict(capture=relative.as_posix(), reference="frame SHA-256 and tape position")]
         else:
             self.feed = HistoricalFeed(folder, trade_day, market_key)
@@ -213,6 +217,16 @@ class Session:
                 if self.execution:
                     self.execution.market(message)
                 self.receives.write(struct.pack("<Q", message["received_by_capture_ns" if self.captured else "received_by_replay_ns"]))
+                if self.captured and "live_eligible" in message and (
+                    not message["live_eligible"] or self.cursor <= self.warm_through
+                ):
+                    # Warm the rule inputs but carry no historical position across the manual start.
+                    self.engine.tick(message)
+                    self.engine.open.clear()
+                    self.engine.unmonitored.clear()
+                    self.engine.managers.clear()
+                    self.engine.responses.pending.clear()
+                    return message
                 return message if self._apply(self.engine.tick, message) else None
             except Exception:
                 self.stop("failure")

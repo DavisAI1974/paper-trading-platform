@@ -164,6 +164,7 @@ def main():
     p.add_argument("--market", default="nymex-ng")
     p.add_argument("--message-budget", type=int, required=True)
     p.add_argument("--event-budget", type=int, required=True)
+    p.add_argument("--capture", type=Path)
     p.add_argument("--execution-plan", type=Path)
     p.add_argument("--greg-go", action="store_true")
     args = p.parse_args()
@@ -191,7 +192,7 @@ def main():
             message_budget=args.message_budget,
             output_budget=args.event_budget,
             market_key=args.market,
-            started=started,
+            started=started, captured=args.capture,
             execution_plan=json.loads(args.execution_plan.read_text()) if args.execution_plan else None,
         )
         pub = Publication(s, url, push_url)
@@ -204,7 +205,7 @@ def main():
             signal.signal(sig, lambda *_: stopped.set())
         opens, halts = trade_day_bounds(args.trade_day)
         base = None
-        indices = ((f, i) for f in s.feed.week for i in range(len(f.records)))
+        indices = () if s.captured else ((f, i) for f in s.feed.week for i in range(len(f.records)))
 
         def guard():
             while not finished.wait(0.1):
@@ -238,6 +239,10 @@ def main():
                 why = s.due()
                 break
             deliver()
+            if s.captured:
+                if s.step(s.cursor) is None and s.state == "active":
+                    stopped.wait(0.1)
+                continue
             # Peek at the next raw receive time without exposing it to any strategy.
             # The scheduler paces delivery; only step() admits that record into the engine.
             next_row = next(indices, None)
