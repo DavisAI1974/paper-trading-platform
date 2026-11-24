@@ -58,6 +58,8 @@
 
 - [ ] **9.** A SECOND VERSION OF ROOT does the live calculations. It sits beside ROOT, never replaces it, and uses ROOT's own calculation code so live and historical numbers come from the same math. DECIDED
 
+  **Built in draft.** Archive replay and the live capture both feed the same strategy input adapter from the weekly book. Start and final receipts now fingerprint the shared calculation adapter, crypto formula, ROOT quote runs, legs, book and calendar. ROOT itself stays intact. Live evidence depends on the authorized run under #1.
+
   **In progress.** The strategy adapter uses ROOT calculations on replay. PR 5 feeds captured MBO through the same session. Live operation is unproven.
 
 - [x] **10.** Dipole and exhaustion are the crypto formulas on the natural gas tape (60 and 20 seconds), read at the nanosecond. DECIDED

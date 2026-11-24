@@ -134,6 +134,9 @@ class Session:
             execution_plan_sha256=hashlib.sha256(json.dumps(execution_plan, sort_keys=True, separators=(",", ":")).encode()).hexdigest() if execution_plan is not None else None,
             manifest_sha256=None if self.captured else digest(folder / "MANIFEST.json"),
             data_commit=git(self.data_root, "rev-parse", "HEAD"),
+            calculation_files={path: digest(code / path) for path in (
+                "paper_platform/inputs.py", "crypto_ng/tick.py", "root/calcs/quote_runs.py",
+                "root/calcs/leg_peaks.py", "root/calendar.py", "root/book.py")},
             rule_commits=self.rule_commits,
             rule_files={k: digest(RULES / (k + ".json")) for k in self.rules},
             causal_check=causal_check,
