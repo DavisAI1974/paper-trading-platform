@@ -20,13 +20,13 @@ from .session import Session, git
 from root.calendar import trade_day_bounds
 
 
-def notify(reason, run):
+def notify(reason, run, *, activity="paper run"):
     response = requests.post(
         "https://api.pushover.net/1/messages.json",
         data={
             "token": os.environ["PUSHOVER_APP_TOKEN"],
             "user": os.environ["PUSHOVER_USER_KEY"],
-            "message": f"NG paper run {run}: {reason}",
+            "message": f"NG {activity} {run}: {reason}",
         },
         timeout=5,
     )

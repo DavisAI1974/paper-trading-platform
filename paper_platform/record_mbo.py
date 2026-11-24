@@ -19,6 +19,7 @@ from root.tape import TapeFolder
 
 from .capture import capture_writer
 from .market import replay_market
+from .run import notify
 from .session import LIMIT_SECONDS, git
 
 
@@ -164,15 +165,22 @@ def main():
     path = data_root / "paper-trading" / "captures" / profile["id"] / sunday / (args.source + ".sqlite")
     identity = json.dumps(dict(market=profile["id"], dataset=profile["source"], symbol=profile["symbol"],
                                sunday=sunday, source=args.source), sort_keys=True)
-    with capture_writer(path, identity) as writer:
-        sink = Sink(writer, args.message_budget, started)
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            signal.signal(sig, lambda *_: sink.stop("capture stopped"))
-        if args.source == "purchased":
-            purchased(data_root, args.trade_day, profile, sink)
-        else:
-            live(args.trade_day, profile, sink)
-        writer.status = sink.reason or "end of purchased input"
+    if not all(os.environ.get(key) for key in ("PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY")):
+        parser.error("capture requires the configured phone stop and failure notices")
+    outcome = "capture failure"
+    try:
+        with capture_writer(path, identity) as writer:
+            sink = Sink(writer, args.message_budget, started)
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                signal.signal(sig, lambda *_: sink.stop("capture stopped"))
+            if args.source == "purchased":
+                purchased(data_root, args.trade_day, profile, sink)
+            else:
+                live(args.trade_day, profile, sink)
+            writer.status = sink.reason or "end of purchased input"
+        outcome = writer.status
+    finally:
+        notify(outcome, f"{profile['id']}/{sunday}/{args.source}", activity="MBO capture")
 
 
 if __name__ == "__main__":
