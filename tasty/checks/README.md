@@ -11,5 +11,7 @@ recording without using the engine's own facts. They send nothing and write noth
     python3 -I tasty/checks/raw_facts.py RECORDING              how many prints trade at their own bid or offer
     python3 -I tasty/checks/raw_sequence_steps.py RECORDING     the step of the sequence number from print to print,
                                                                  and the day volume beside the print sizes
+    python3 -I tasty/checks/raw_no_side_prints.py RECORDING     what the prints with no side look like, and what
+                                                                 they are the first to show
 
 First used for step 0 of handoff V (markets-data `paper-trading-20261123/step0-20261124/STEP0_TRACE_20261124.md`).
