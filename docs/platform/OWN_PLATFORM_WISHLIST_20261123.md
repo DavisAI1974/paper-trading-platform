@@ -140,7 +140,7 @@
 
 - [ ] **31.** An order is never sent twice. Each carries its own unique tag. DECIDED
 
-  **In progress.** Main assigns unique order IDs and the relay handles identical retries. The native submission path still needs to handle a repeated tag before it cancels resting orders or submits to the matching engine.
+  **Built in draft.** All native venues share a session-long order-tag registry. The first submission claims its tag before cancellation, journaling or matching, including a close with zero inventory or a missing quote. Entries, strategy and manager exits, and administrative closes use the same guard. Each venue retains its own partial fills and inventory. Review and merge are pending.
 
 - [ ] **32.** Keys and tokens never in any file, print or commit. DECIDED
 

@@ -1,6 +1,7 @@
 """One native Nautilus L3 matching engine per agent-configured rule."""
 
 from collections import defaultdict
+from threading import Lock
 
 from nautilus_trader.backtest.engine import OrderMatchingEngine
 from nautilus_trader.backtest.models import FillModel, MakerTakerFeeModel
@@ -19,8 +20,24 @@ from nautilus_trader.model.orders import LimitOrder, MarketOrder
 from .nautilus_book import DBN_TO_NATIVE
 
 
+class OrderTags:
+    """Keep every attempted tag for the life of one paper session."""
+
+    def __init__(self):
+        self.seen = set()
+        self.lock = Lock()
+
+    def claim(self, tag):
+        with self.lock:
+            if tag in self.seen:
+                return False
+            self.seen.add(tag)
+            return True
+
+
 class RuleVenue:
-    def __init__(self, rule, instrument, raw_id, emit):
+    def __init__(self, rule, instrument, raw_id, emit, tags):
+        self.tags = tags
         self.rule = rule
         self.instrument = instrument
         self.clock = TestClock()
@@ -66,7 +83,10 @@ class RuleVenue:
         else:
             self.emit("order status", **data, reason=str(getattr(event, "reason", type(event).__name__)))
 
-    def submit(self, event, placement, quantity, order_id):
+    def submit(self, event, placement, quantity, order_id, *, executable=True):
+        # A close may cancel orders even if it finds zero filled contracts.
+        if not self.tags.claim(order_id):
+            return
         style = placement["style"]
         offset = placement["offset_ticks"]
         key, action = event["trade_id"], event["action"]
@@ -77,6 +97,10 @@ class RuleVenue:
                 self.engine.cancel_order(self.orders[identifier][0])
             held = self.inventory[key]
             quantity = abs(held)
+            if quantity and not executable:
+                self.emit("order status", **event, order_id=order_id, remaining_contracts=held,
+                          execution_event="liquidation unavailable after feed interruption")
+                return
             if not quantity:
                 return
             side = OrderSide.SELL if held > 0 else OrderSide.BUY
@@ -116,6 +140,9 @@ class RuleVenue:
                                    self.account, UUID4(), self.received, self.received))
         self.cache.update_order(order)
         self.engine.process_order(order, self.account)
+        if event.get("administrative_flatten") and self.inventory[key]:
+            self.emit("order status", **event, order_id=order_id, remaining_contracts=self.inventory[key],
+                      execution_event="unfilled administrative remainder")
 
 
 class PaperExecution:
@@ -128,6 +155,7 @@ class PaperExecution:
         self.venues = {}
         self.followers = defaultdict(list)
         self.rules = rules
+        tags = OrderTags()
         for rule, policy in self.policies.items():
             if type(policy["contracts"]) is not int or policy["contracts"] <= 0:
                 raise ValueError(f"invalid contract quantity for {rule}")
@@ -155,7 +183,7 @@ class PaperExecution:
                 if parent not in rules or rules[parent]["role"] == "manager":
                     raise ValueError(f"{rule} needs a catalogue entry rule, got {parent}")
                 self.followers[parent].append(rule)
-            self.venues[rule] = RuleVenue(rule, self.instrument, self.raw_id, emit)
+            self.venues[rule] = RuleVenue(rule, self.instrument, self.raw_id, emit, tags)
 
     def market(self, msg):
         if msg["period"] == "vendor snapshot":
@@ -231,18 +259,12 @@ class PaperExecution:
 
     def flatten(self, last, reason, run, *, executable=True):
         for rule, venue in self.venues.items():
-            for order, _, _, _ in tuple(venue.orders.values()):
-                if order.is_open:
-                    venue.engine.cancel_order(order)
-            for key, held in list(venue.inventory.items()):
-                if held:
-                    identifier = f"{run}-flatten-{rule}-{key}"
-                    event = dict(rule=rule, trade_id=key, action="close", trade_data=False, reason=reason,
-                                 received=last["raw"]["ts_recv"], reference=(last["source_sha256"], last["record_index"]),
-                                 bid=last["best_bid"], ask=last["best_ask"])
-                    if executable:
-                        venue.submit(event, {"style": "cross", "offset_ticks": 0}, abs(held), identifier)
-                    if venue.inventory[key]:
-                        venue.emit("order status", **event, remaining_contracts=venue.inventory[key],
-                                   execution_event=("unfilled administrative remainder" if executable else
-                                                    "liquidation unavailable after feed interruption"))
+            keys = dict.fromkeys(venue.active_orders)
+            keys.update((key, None) for key, held in venue.inventory.items() if held)
+            for key in keys:
+                identifier = f"{run}-flatten-{rule}-{key}"
+                event = dict(rule=rule, trade_id=key, action="close", trade_data=False,
+                             administrative_flatten=True, reason=reason, received=last["raw"]["ts_recv"],
+                             reference=(last["source_sha256"], last["record_index"]),
+                             bid=last["best_bid"], ask=last["best_ask"])
+                venue.submit(event, {"style": "cross", "offset_ticks": 0}, 0, identifier, executable=executable)
