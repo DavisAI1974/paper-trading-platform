@@ -129,3 +129,22 @@ def test_follow_delivers_a_close_committed_during_a_poll(viewer, opening, monkey
     rows = [json.loads(line) for line in response.text.splitlines()]
     assert closed and [row["sequence"] for row in rows] == [0, 1]
     assert rows[-1]["reason"] == "end of offline verification"
+
+
+def test_filtered_stream_reports_closure_after_the_last_matching_event(viewer, opening):
+    client, auth, headers = viewer
+    event = opening["event"]
+    run = event["run"]
+    assert client.post("/ingest", json=opening, headers=headers).json() == {"next": 1}
+    finish(client, headers, run, 1)
+
+    params = {"run": run, "rule": event["rule"]}
+    stream = client.get("/stream", params=params, auth=auth)
+    message, finished = stream.text.strip().split("\n\n")
+    assert message.startswith(f"id: {run}/0\nevent: message\n")
+    kind, data = finished.splitlines()
+    assert kind == "event: finished"
+    assert json.loads(data.removeprefix("data: "))["status"] == "end of offline verification"
+
+    resumed = client.get("/stream", params=params, headers={"Last-Event-ID": f"{run}/0"}, auth=auth)
+    assert resumed.text.strip() == finished

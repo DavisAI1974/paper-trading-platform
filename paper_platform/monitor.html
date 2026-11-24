@@ -18,7 +18,11 @@ const list=document.querySelector('#events'),statusLine=document.querySelector('
 if(list.dataset.stream){
   const stream=new EventSource(list.dataset.stream);
   stream.onmessage=({data})=>{const row=JSON.parse(data);list.insertAdjacentHTML('afterbegin',row.html);statusLine.textContent=row.status};
-  stream.addEventListener('finished',()=>stream.close());
+  stream.addEventListener('finished',({data})=>{
+    const {status}=JSON.parse(data);
+    if(status) statusLine.textContent=status;
+    stream.close();
+  });
   stream.onerror=()=>{statusLine.textContent='Reconnecting…'};
 }
 </script></body></html>

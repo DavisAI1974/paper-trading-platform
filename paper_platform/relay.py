@@ -149,7 +149,8 @@ def relay():
                     continue
                 if not follow or ("run" in state and state["status"] != "active"):
                     if html:
-                        yield "event: finished\ndata: {}\n\n"
+                        data = json.dumps({"status": state["status"]})
+                        yield f"event: finished\ndata: {data}\n\n"
                     return
                 await asyncio.sleep(0.1)
 
