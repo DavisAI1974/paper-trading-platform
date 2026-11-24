@@ -16,10 +16,14 @@ on:
         type: choice
         options: [purchased-archive, purchased-capture, live-capture]
         default: purchased-archive
-      execution_plan:
-        description: Committed agent plan filename or inline execution plan JSON
+      original_run:
+        description: For live-capture only, replay the window and agent plan of this published run
+        required: false
         type: string
-        required: true
+      execution_plan:
+        description: Agent plan filename or JSON, required unless replaying an original run
+        type: string
+        required: false
       market:
         description: Registered instrument profile
         required: true
@@ -62,6 +66,23 @@ jobs:
         with:
           python-version: '3.13'
       - run: python -m pip install -r paper_platform/requirements.txt
+      - name: Select the replay instructions
+        env:
+          RUN_ID: ${{ inputs.original_run }}
+          TAPE: ${{ inputs.tape }}
+          PLAN: ${{ inputs.execution_plan }}
+        run: |
+          if [[ -n "$RUN_ID" ]]; then
+            [[ "$TAPE" == live-capture && "$RUN_ID" =~ ^[0-9a-f]{32}$ && -z "$PLAN" ]]
+          else
+            [[ -n "$PLAN" ]]
+          fi
+      - if: inputs.original_run != ''
+        uses: ./.github/actions/markets-data
+        with:
+          path: original-journal
+          ref: refs/heads/paper-runs/${{ inputs.original_run }}
+          paths: paper-trading/${{ inputs.original_run }}
       - if: inputs.tape == 'purchased-capture' || inputs.tape == 'live-capture'
         uses: ./.github/actions/markets-data
         with:
@@ -79,6 +100,7 @@ jobs:
           echo "CAPTURE_COMMIT=$(git -C recorded-checkpoint rev-parse HEAD)" >> "$GITHUB_ENV"
       - name: Replay the selected stored tape
         env:
+          ORIGINAL_RUN: ${{ inputs.original_run }}
           TRADE_DAY: ${{ inputs.trade_day }}
           EXECUTION_PLAN: ${{ inputs.execution_plan }}
           MARKET: ${{ inputs.market }}
@@ -94,4 +116,8 @@ jobs:
           if [[ -n "${RECORDED_CAPTURE:-}" ]]; then
             capture_args=(--replay-capture "$RECORDED_CAPTURE" --capture-commit "$CAPTURE_COMMIT")
           fi
-          python -B -m paper_platform.run "${capture_args[@]}" --agent-plan "$EXECUTION_PLAN" --greg-go --data purchased-inputs --market "$MARKET" --trade-day "$TRADE_DAY" --message-budget "$MESSAGE_BUDGET" --event-budget "$EVENT_BUDGET"
+          plan_args=(--agent-plan "$EXECUTION_PLAN")
+          if [[ -n "$ORIGINAL_RUN" ]]; then
+            plan_args=(--replay-receipt "original-journal/paper-trading/$ORIGINAL_RUN/receipt.json")
+          fi
+          python -B -m paper_platform.run "${capture_args[@]}" "${plan_args[@]}" --greg-go --data purchased-inputs --market "$MARKET" --trade-day "$TRADE_DAY" --message-budget "$MESSAGE_BUDGET" --event-budget "$EVENT_BUDGET"

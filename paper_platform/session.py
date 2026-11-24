@@ -34,7 +34,7 @@ class Session:
     def __init__(
         self, data_root, trade_day, *, message_budget, output_budget, market_key="nymex-ng", on_event=None,
         started=None, execution_plan=None, captured=None, plan_source=None, capture_connection=None,
-        replay_capture=False, capture_commit=None,
+        replay_capture=False, capture_commit=None, replay_receipt=None,
     ):
         self.started = time.monotonic() if started is None else started
         self.trade_day = trade_day.isoformat()
@@ -76,20 +76,33 @@ class Session:
         folder = self.data_root / self.market["archive"]
         self.capture_end = None
         self.liquidation_available = True
+        self.first_live_decision_cursor = None
         self.captured = captured is not None
         if self.captured:
             from .capture import CapturedFeed, capture_preflight
             path = Path(captured).resolve()
             relative = path.relative_to(self.data_root / "paper-trading" / "captures")
+            if replay_receipt is not None:
+                original = replay_receipt["inputs"][0]
+                if (not replay_capture or original.get("mode") != "follow recorder"
+                        or original.get("capture") != relative.as_posix()
+                        or replay_receipt["trade_day"] != self.trade_day or replay_receipt["market"] != market_key
+                        or "first_live_decision_cursor" not in replay_receipt):
+                    raise ValueError("receipt lacks a matching live capture and recorded eligibility window")
             self.feed = CapturedFeed(path, trade_day, capture_connection)
             causal_check = capture_preflight(self.feed, self.rules, self.started + LIMIT_SECONDS, follow=not replay_capture)
-            self.stream = self.feed.messages(follow=not replay_capture, poll=not replay_capture, through_trade_day=replay_capture)
+            if replay_receipt is not None:
+                self.stream = self.feed.recorded_run(replay_receipt)
+            else:
+                self.stream = self.feed.messages(follow=not replay_capture, poll=not replay_capture,
+                                                 through_trade_day=replay_capture)
             import sqlite3
             from contextlib import closing
             with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as db:
-                self.warm_through = db.execute("SELECT COALESCE(MAX(position),-1) FROM frames").fetchone()[0]
+                self.warm_through = -1 if replay_capture else db.execute("SELECT COALESCE(MAX(position),-1) FROM frames").fetchone()[0]
             sources = [dict(capture=relative.as_posix(), connection_id=self.feed.connection_id,
                             mode="stored replay" if replay_capture else "follow recorder",
+                            original_run=replay_receipt["run"] if replay_receipt else None,
                             checkpoint_commit=capture_commit, warm_through=None if replay_capture else self.warm_through,
                             reference="frame SHA-256 and tape position")]
         else:
@@ -222,6 +235,12 @@ class Session:
                 if message is None:
                     self.stop("end of capture" if self.captured else "end of purchased input")
                     return None
+                if "recorded_stop" in message:
+                    if message["recorded_capture_end"] is not None:
+                        self.stop_capture(message["recorded_capture_end"])
+                    else:
+                        self.stop(message["recorded_stop"])
+                    return None
                 if "capture_end" in message:
                     self.stop_capture(message["capture_end"])
                     return None
@@ -251,6 +270,8 @@ class Session:
                     self.engine.managers.clear()
                     self.engine.responses.pending.clear()
                     return message
+                if message.get("live_eligible") and self.first_live_decision_cursor is None:
+                    self.first_live_decision_cursor = self.cursor
                 return message if self._apply(self.engine.tick, message) else None
             except Exception:
                 self.stop("failure")
@@ -310,6 +331,7 @@ class Session:
                 files = {p.name: digest(p) for p in self.folder.iterdir() if p.is_file()}
                 receipt = dict(
                     **self.initial, status=reason, delivered=self.cursor + 1, events=self.events, files=files,
+                    first_live_decision_cursor=self.first_live_decision_cursor,
                     remaining_paper_inventory=self._paper_inventory(), last_source=self.last_source(),
                     capture_end=self.capture_end,
                 )

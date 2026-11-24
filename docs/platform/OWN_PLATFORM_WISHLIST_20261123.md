@@ -56,7 +56,7 @@
 
 - [ ] **12.** Replay mode: the same platform runs a stored trade day's tape, tick by tick, with the same code as live. SUGGESTED
 
-  **In progress.** The manual replay workflow defaults to the purchased DBN archive. PR 5 can also restore a purchased or live capture checkpoint from markets-data and replay the committed tape through the named trade day’s final UTC file using the same book, calculations and native venues. The receipt names the checkpoint commit. Live runs also record their historical warm-up boundary. Live/replay decision parity remains open.
+  **Built in draft, awaiting parity evidence.** The manual replay workflow defaults to the pinned purchased NG archive. It can also restore a weekly purchased or live MBO checkpoint from markets-data and feed its records through the same book, calculations and native venues. For a recorded live run, its receipt supplies the agent plan, first eligible cursor, last processed frame and stop reason. Replay seats from Sunday, warms through the original start, and caps delivery at the original endpoint. It records the checkpoint commit and original run ID. Receipts predating the eligibility field support whole-tape replay only. A comparison of an authorized live run with its stored replay is still outstanding.
 
 ## THE RULES OF THE HOUSE
 

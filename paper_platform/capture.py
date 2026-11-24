@@ -5,6 +5,7 @@ from datetime import datetime, time as wall_time, timedelta, timezone
 import json
 import fcntl
 import hashlib
+from itertools import islice
 from pathlib import Path
 import sqlite3
 import struct
@@ -161,6 +162,33 @@ class CapturedFeed:
         with closing(sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
             db.execute("BEGIN")
             return self._connection_end(db)
+
+    def recorded_run(self, receipt):
+        """Admit exactly the MBO prefix the original live runner consumed."""
+        delivered = receipt["delivered"]
+        first = receipt["first_live_decision_cursor"]
+        if type(delivered) is not int or delivered < 0 or (
+            first is not None and (type(first) is not int or not 0 <= first < delivered)
+        ):
+            raise ValueError("invalid recorded MBO window")
+        last = receipt["last_source"]
+        if delivered:
+            if not last or last["cursor"] != delivered - 1 or last["reference"][1] != delivered - 1:
+                raise ValueError("recorded endpoint differs from the delivered count")
+            with closing(sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+                row = db.execute("SELECT body FROM frames WHERE position=?", (delivered - 1,)).fetchone()
+            if row is None or hashlib.sha256(row[0]).hexdigest() != last["reference"][0]:
+                raise ValueError("checkpoint does not contain the recorded final MBO")
+        elif last is not None:
+            raise ValueError("empty recorded run has an input endpoint")
+        count = 0
+        for message in islice(self.messages(), delivered):
+            message["live_eligible"] = first is not None and count >= first
+            yield message
+            count += 1
+        if count != delivered:
+            raise ValueError("checkpoint ended before the recorded endpoint")
+        yield {"recorded_stop": receipt["status"], "recorded_capture_end": receipt.get("capture_end")}
 
     def messages(self, *, follow=False, poll=False, through_trade_day=False):
         uri = self.path.resolve().as_uri() + "?mode=ro"

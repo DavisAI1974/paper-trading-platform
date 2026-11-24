@@ -211,8 +211,11 @@ def main():
     plans = p.add_mutually_exclusive_group()
     plans.add_argument("--execution-plan", type=Path)
     plans.add_argument("--agent-plan")
+    plans.add_argument("--replay-receipt", type=Path)
     p.add_argument("--greg-go", action="store_true")
     args = p.parse_args()
+    if args.replay_receipt and not args.replay_capture:
+        p.error("select the stored live capture for receipt-based replay")
     if args.replay_capture and args.capture_connection is not None:
         p.error("a stored capture has no active recorder connection")
     if not args.greg_go:
@@ -233,7 +236,17 @@ def main():
     why = "failure"
     try:
         requests.get(url + "/health", timeout=90).raise_for_status()
-        execution_plan, plan_source = read_execution_plan(args)
+        receipt = None
+        if args.replay_receipt:
+            receipt = json.loads(args.replay_receipt.read_text(encoding="utf-8"))
+            if receipt["run"] != args.replay_receipt.parent.name:
+                raise ValueError("receipt belongs to a different paper run")
+            execution_plan = receipt["execution_plan"]
+            plan_source = "receipt for " + receipt["run"]
+            args.message_budget = min(args.message_budget, receipt["constants"]["message_budget"])
+            args.event_budget = min(args.event_budget, receipt["constants"]["event_budget"])
+        else:
+            execution_plan, plan_source = read_execution_plan(args)
         s = Session(
             args.data,
             args.trade_day,
@@ -241,7 +254,7 @@ def main():
             output_budget=args.event_budget,
             market_key=args.market,
             started=started, captured=args.capture or args.replay_capture, capture_connection=args.capture_connection,
-            replay_capture=args.replay_capture is not None, capture_commit=args.capture_commit,
+            replay_capture=args.replay_capture is not None, capture_commit=args.capture_commit, replay_receipt=receipt,
             execution_plan=execution_plan, plan_source=plan_source,
         )
         pub = Publication(s, url, push_url)
