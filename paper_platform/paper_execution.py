@@ -229,7 +229,7 @@ class PaperExecution:
             style = {"style": "cross", "offset_ticks": 0}
         self.venues[rule].submit(event, style, policy["contracts"], order_id)
 
-    def flatten(self, last, reason, run):
+    def flatten(self, last, reason, run, *, executable=True):
         for rule, venue in self.venues.items():
             for order, _, _, _ in tuple(venue.orders.values()):
                 if order.is_open:
@@ -240,7 +240,9 @@ class PaperExecution:
                     event = dict(rule=rule, trade_id=key, action="close", trade_data=False, reason=reason,
                                  received=last["raw"]["ts_recv"], reference=(last["source_sha256"], last["record_index"]),
                                  bid=last["best_bid"], ask=last["best_ask"])
-                    venue.submit(event, {"style": "cross", "offset_ticks": 0}, abs(held), identifier)
+                    if executable:
+                        venue.submit(event, {"style": "cross", "offset_ticks": 0}, abs(held), identifier)
                     if venue.inventory[key]:
                         venue.emit("order status", **event, remaining_contracts=venue.inventory[key],
-                                   execution_event="unfilled administrative remainder")
+                                   execution_event=("unfilled administrative remainder" if executable else
+                                                    "liquidation unavailable after feed interruption"))
