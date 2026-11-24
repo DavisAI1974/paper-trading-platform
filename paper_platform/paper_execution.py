@@ -319,10 +319,11 @@ class PaperExecution:
         """Route the originating signal and any independently configured manager orders."""
         parent = signal["rule"]
         if (self.give_back is not None and signal["action"] in ("close", "exit")
-                and signal.get("trade_data") is not False and signal["reason"] != "trade day ended"):
+                and signal.get("trade_data") is not False and signal["reason"] != "trade day ended"
+                and not signal.get("answer_id")):
             # Under the give-back exit a rule's own close stays a research signal in the journal and sends no
             # order: the paper trade is closed by the give-back. The end of the trade day and every
-            # administrative close still close it.
+            # administrative close still close it. So does a close taken in from an answer (answer_id).
             return
         if parent in self.venues:
             if signal["action"] == "exit":

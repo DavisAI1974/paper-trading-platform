@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from crypto_ng.tick import NS
 
+from .answers import validate
 from .causal_gate import PreflightDeadline, check_prefix
 from .engine import Engine
 from .feed import HistoricalFeed
@@ -35,7 +36,16 @@ class Session:
         self, data_root, trade_day, *, message_budget, output_budget, market_key="nymex-ng", on_event=None,
         started=None, execution_plan=None, captured=None, plan_source=None, capture_connection=None,
         replay_capture=False, capture_commit=None, replay_receipt=None, paced_from_ns=None,
+        answers=None, answer_close=False,
     ):
+        # Answers from outside (see answers.py): with none plugged in (answers=None) nothing below runs.
+        self.answers = answers
+        self.answer_close = answer_close
+        self.answers_off = set()
+        self.answers_seen = set()
+        self.answers_taken = self.answers_applied = 0
+        self.answers_hash = hashlib.sha256()
+        self.answers_unordered = set()
         # A start point inside the trade day, on the tape's own receive time (Greg, 2026-11-24: "Just do the
         # next 30 min"). Before it the book, the matcher and the rule inputs are warmed and nothing is
         # decided, journaled or ordered; the run starts new at that instant and carries no position into it.
@@ -163,6 +173,8 @@ class Session:
                 paced_from_tape_ns=paced_from_ns,
             ),
         )
+        if answers is not None:
+            self.initial["answers"] = dict(on=True, answer_close=answer_close)
         (self.folder / "start.json").write_text(json.dumps(self.initial, indent=2), encoding="utf8")
         self.write("status", reason="started")
 
@@ -194,11 +206,19 @@ class Session:
             return
         sequence = signal["sequence"]
         order_id = f"{self.run}-{sequence}"
+        if self.answers_off and e["action"] == "open" and e["rule"] in self.answers_off:
+            # An answer switched this rule's orders off: the signal is journaled above and sends no order.
+            self.answers_unordered.add(e["trade_id"])
         if self.execution is None:
+            if e["trade_id"] in self.answers_unordered:
+                return
             self.write("paper order", **e, order_id=order_id, signal_sequence=sequence,
                        pricing="open", fill_price=None)
             return
         for instruction in self.execution.instructions(dict(e, signal_sequence=sequence)):
+            if self.answers_off and instruction["action"] == "open" and (
+                    instruction["rule"] in self.answers_off or instruction.get("entry_rule") in self.answers_off):
+                continue
             # Only the event budget cuts a decision's orders short. The clock is checked once the decision
             # is whole, so a live run and its replay send the same orders for the same message.
             if self.state == "active" and self.events >= self.output_budget:
@@ -311,6 +331,11 @@ class Session:
                 if self.captured:
                     self.capture_frame_hash.update(bytes.fromhex(message["source_sha256"]))
                 self.receives.write(struct.pack("<Q", message["received_by_capture_ns" if self.captured else "received_by_replay_ns"]))
+                if (self.answers is not None and message["period"] != "vendor snapshot" and not (
+                        warming or self.captured and "live_eligible" in message and (
+                            not message["live_eligible"] or self.cursor <= self.warm_through))):
+                    # The same test as the warm-up branch below: nothing is answered while only warming.
+                    self._take_answers(message["raw"]["ts_recv"])
                 if self.execution:
                     self.execution.market(message)
                 if self.execution and self.events >= self.output_budget:
@@ -332,6 +357,77 @@ class Session:
             except Exception:
                 self.stop("failure")
                 raise
+
+    def _take_answers(self, tape_ns):
+        """Take the waiting answers, in the order they arrived, before this message is applied.
+
+        Each is a journal row of kind `answer` at the message's receive time. It changes only what comes after
+        its row. The wall clock is not read here.
+        """
+        for answer in self.answers.take(tape_ns):
+            self.answers_taken += 1
+            self.answers_hash.update(json.dumps(answer, sort_keys=True, separators=(",", ":")).encode() + b"\n")
+            reason = self._answer_refusal(answer)
+            if isinstance(answer, dict) and isinstance(answer.get("id"), str):
+                self.answers_seen.add(answer["id"])
+            if reason is None:
+                self.answers_applied += 1
+            row = dict(answer=answer, tape_received_ns=tape_ns, applied=reason is None)
+            if reason is not None:
+                row["reason"] = reason
+            self.write("answer", **row)
+            if reason is None:
+                self._apply_answer(answer)
+
+    def _orders_for(self, rule):
+        if self.execution is None:
+            return True
+        return rule in self.execution.policies or bool(self.execution.followers.get(rule))
+
+    def _answer_refusal(self, answer):
+        """The reason an answer is not applied, or None. Decided before its row is written."""
+        reason = validate(answer)
+        if reason is not None:
+            return "malformed: " + reason
+        if answer["id"] in self.answers_seen:
+            return "an answer with this id was already taken"
+        if answer["action"] == "close":
+            idea = self.engine.open.get(answer["trade_id"])
+            if idea is None:
+                return "the trade is not open"
+            if answer.get("rule", idea["rule"]) != idea["rule"]:
+                return "the trade belongs to another rule"
+            if not self._orders_for(idea["rule"]):
+                return "the plan sends no orders for this rule"
+            if not self.answer_close:
+                return ("the hold rule in force is the give-back exit; closing by answer is not switched on")
+            return None
+        rule = answer["rule"]
+        if rule not in self.rules:
+            return "unknown rule"
+        if not self._orders_for(rule):
+            return "the plan sends no orders for this rule"
+        if (answer["action"] == "rule_off") == (rule in self.answers_off):
+            return "the rule is already " + ("off" if rule in self.answers_off else "on")
+        return None
+
+    def _apply_answer(self, answer):
+        if answer["action"] == "rule_off":
+            self.answers_off.add(answer["rule"])
+        elif answer["action"] == "rule_on":
+            self.answers_off.discard(answer["rule"])
+        else:
+            # The trade is closed with its rule's own closing instruction, on the last quote the session knows.
+            event = self.engine.close_trade(answer["trade_id"], "answer " + answer["id"], self.engine.last)
+            self.record(dict(event, answer_id=answer["id"]))
+
+    def answers_receipt(self):
+        if self.answers is None:
+            return {"on": False}
+        return dict(on=True, answer_close=self.answer_close, taken=self.answers_taken,
+                    applied=self.answers_applied, not_applied=self.answers_taken - self.answers_applied,
+                    waiting_at_stop=self.answers.waiting(), sha256=self.answers_hash.hexdigest(),
+                    causal_check_covers="the rules' decisions without answers")
 
     def stop_capture(self, evidence):
         with self.lock:
@@ -411,6 +507,7 @@ class Session:
                     capture_end=self.capture_end,
                     weekly_book_boundaries=self.weekly_book_boundaries,
                 )
+                receipt["answers"] = self.answers_receipt()
                 if self.captured:
                     receipt["timers_after_last_input_ns"] = self.timers_after_input
                     receipt["capture_frame_hashes_sha256"] = self.capture_frame_hash.hexdigest()
