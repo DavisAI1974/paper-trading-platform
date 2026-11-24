@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from .rulebook import catalogue
 from .market import markets
 from .trades import trade_rows
-from .views import card, page, trade_card
+from .views import card, page, stop_details, trade_card
 
 
 class Packet(BaseModel):
@@ -210,7 +210,11 @@ def relay():
                     continue
                 if not follow or ("run" in state and state["status"] != "active"):
                     if html:
-                        data = json.dumps({"status": state["status"]})
+                        details = stop_details(state, rule)
+                        payload = {"status": state["status"]}
+                        if details:
+                            payload["stop_html"] = details
+                        data = json.dumps(payload)
                         yield f"event: finished\ndata: {data}\n\n"
                     return
                 await asyncio.sleep(0.1)
