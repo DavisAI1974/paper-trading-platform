@@ -2,6 +2,8 @@
 
 **16 of 35 checked off.** A checked box means the requirement is supplied by NautilusTrader or implemented on main. An open box names the remaining work. The original DECIDED, OPEN and SUGGESTED labels record the November 23 wishlist. The status beneath each item records subsequent decisions and progress. [NautilusTrader comparison](NAUTILUSTRADER_COVERAGE.md) · [Draft PR 5](https://github.com/DavisAI1974/paper-trading-platform/pull/5) · [Archived original](https://github.com/DavisAI1974/markets-data/blob/111e46bc156ecf05bfa25814cea3b9c7040a5fc9/tasks/family-research-20261022/research-union-current/paper-trading-20261123/OWN_PLATFORM_WISHLIST_20261123.md)
 
+[Current build handoff](HANDOFF.md) · [Draft implementation branch](https://github.com/DavisAI1974/paper-trading-platform/tree/codex/strategy-trades-and-mbo-capture)
+
 ## WHAT IT IS
 
 - [ ] **1.** Paper trades natural gas futures (and their options later) on a live feed. No real money, no real orders.
@@ -32,7 +34,7 @@
 
 - [ ] **7.** Everything the feed sends is recorded whole, as it arrives, with our receive time in nanoseconds. Raw, nothing dropped. DECIDED
 
-  **In progress.** PR 5 records DBN deliveries and host receive times and adds recovery checkpoints. A replacement runner can restore encrypted checkpoints from markets-data. A hard loss between checkpoints can lose original receive timestamps.
+  **In progress.** PR 5 records DBN deliveries and host receive times and adds recovery checkpoints. A replacement runner can restore encrypted checkpoints from markets-data. The recorder persists the connection ID, last durable frame position and termination reason. A hard loss between checkpoints can lose original receive timestamps.
 
 - [x] **8.** Real data only. No made-up numbers, not even to test code. DECIDED
 
@@ -90,7 +92,7 @@
 
 - [ ] **20.** A run STOPS ITSELF AT 5.75 HOURS, flattens every position, and marks each closing order "flattened at the 5.75-hour stop": not trade data. DECIDED
 
-  **In progress.** Main stops and records administrative closes for quote-only positions. PR 5 adds cancellation and liquidation of filled inventory and records any unfilled remainder. Operational evidence is pending.
+  **In progress.** Main stops and records administrative closes for quote-only positions. PR 5 adds cancellation and liquidation of filled inventory and records any unfilled remainder. On feed loss, the draft cancels resting orders and records the actual contracts still held for each trade. Operational evidence is pending.
 
 - [x] **21.** Each run starts over new. Nothing carries over. DECIDED
 
@@ -108,11 +110,11 @@
 
 - [ ] **24.** REAL TIME: every signal, order, fill and status the moment it happens, on one page that reads well on a phone. DECIDED
 
-  **In progress.** The server-rendered phone page streams journal events. PR 5 adds native fill events and HTML/htmx navigation. Hosted delivery is pending.
+  **In progress.** The server-rendered phone page streams journal events. PR 5 adds native fill events and HTML/htmx navigation. The filtered phone view also shows the stop reason, the last processed input and the recorder endpoint. Hosted delivery is pending.
 
 - [ ] **25.** The same events appended to the git record in markets-data, pushed every minute and at once on every order and fill. DECIDED
 
-  **In progress.** The publisher targets markets-data on orders and each minute. PR 5 also pushes on each fill. Operational evidence is pending.
+  **In progress.** The publisher targets markets-data on orders and each minute. PR 5 also pushes on each fill and retries the same Git commit after a publication failure. Operational evidence is pending.
 
 - [ ] **26.** A phone notice for: a budget stop, a run stop, a failure. The live store and the notice service are named to Greg before anything is set up. OPEN
 
@@ -138,7 +140,7 @@
 
 - [ ] **31.** An order is never sent twice. Each carries its own unique tag. DECIDED
 
-  **In progress.** Main assigns unique order IDs and the relay handles identical retries. Idempotency through simulated execution still needs evidence.
+  **In progress.** Main assigns unique order IDs and the relay handles identical retries. The native submission path still needs to handle a repeated tag before it cancels resting orders or submits to the matching engine.
 
 - [ ] **32.** Keys and tokens never in any file, print or commit. DECIDED
 
