@@ -133,6 +133,15 @@ line here is a result.
 18. 2026-11-24, Claude, same run. 6 of the 19 submits were answered with a server error (HTTP 500). None was re-sent
     and none was found afterwards, so those six trades never opened, and each still used one of the 20 orders.
 
+19. 2026-11-24, Claude, from the feed-only recording after the run. C9 MEASURED: THE SANDBOX FILLS AT THE MARKET AS
+    IT IS NOW, NOT AT THE FEED IT GIVES US. Each of the 13 fills, set beside the feed's own prints at the market
+    time it filled (the recording was exactly 900.1 seconds behind), is at the bid or the offer of the print just
+    before or just after it: for example CL13-0001 sold at 3.547 with the market at 3.547 bid, 3.548 offered,
+    while the print it acted on showed 3.538 and 3.539. So on this sandbox a rule decides on a quote that is 15
+    minutes old and is filled on a different one. Entries and exits cannot be tested this way; a fill here says
+    nothing about the quote the rule saw. Each fill is on its own line in DATA
+    `paper-trading-20261123/live-runs/feed-only-20261124T011440Z/fills-beside-the-market.json`.
+
 ## D. Runs
 
 1. 2026-11-23 evening (trade day Tue Nov 24, 2026), 8:05 pm to 8:12 pm Eastern. THE FIRST RUN WITH ORDERS, on Greg's
@@ -148,6 +157,11 @@ line here is a result.
    - What it showed: C8 to C11 and C14 to C18.
    Records: DATA `paper-trading-20261123/live-runs/orders-20261124T010517Z/` (the run) and
    `closeout-20261124T011337Z/` (the close-out and two dry-run probes).
+
+2. 2026-11-23 evening (trade day Tue Nov 24, 2026), 8:14 pm to 8:31 pm Eastern. A FEED-ONLY RECORDING, no orders
+   (the runner without `--orders`), to catch the feed as it reached the moments the first run's orders filled.
+   440 messages, 183 paper trades on the ledger, 364 intended orders written and none sent. It gave C19.
+   Record: DATA `paper-trading-20261123/live-runs/feed-only-20261124T011440Z/`. Not scored.
 
 (Each live run is added here when it has been made: the date, how long, how many orders, where its record is, and
 the gaps and misses it showed. Each of those also gets its own line in section A, B or C.)

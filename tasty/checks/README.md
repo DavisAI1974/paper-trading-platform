@@ -13,5 +13,8 @@ recording without using the engine's own facts. They send nothing and write noth
                                                                  and the day volume beside the print sizes
     python3 -I tasty/checks/raw_no_side_prints.py RECORDING     what the prints with no side look like, and what
                                                                  they are the first to show
+    python3 -I tasty/checks/fills_beside_the_market.py RUN_DIR LATER_FEED_DIR OUT.json
+                                                                 each sandbox fill of a run beside the feed's own
+                                                                 prints at the market time it filled
 
 First used for step 0 of handoff V (markets-data `paper-trading-20261123/step0-20261124/STEP0_TRACE_20261124.md`).
