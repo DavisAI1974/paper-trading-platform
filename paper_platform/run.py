@@ -21,7 +21,7 @@ from .api import wire
 from .causal_gate import PreflightDeadline
 from .journal_publication import GitJournal
 from .session import Session, git
-from .run_clock import CLOCK_STOP, LIMIT_SECONDS, run_start_ns
+from .run_clock import CLOCK_STOPS, LIMIT_SECONDS, run_start_ns
 from root.calendar import trade_day_bounds
 
 
@@ -376,7 +376,7 @@ def main():
             try:
                 s.stop(why)
                 shutdown = s.shutdown_evidence
-                if shutdown.get("errors") or (s.state == CLOCK_STOP and shutdown.get("native_flat") is False):
+                if shutdown.get("errors") or (s.state in CLOCK_STOPS and shutdown.get("native_flat") is False):
                     errors.append("administrative liquidation")
             except Exception:
                 errors.append("close")

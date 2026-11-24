@@ -18,7 +18,7 @@ from .engine import Engine
 from .feed import HistoricalFeed
 from .rulebook import RULES, catalogue
 from .market import replay_market
-from .run_clock import CLOCK_STOP, LIMIT_SECONDS, run_start_ns
+from .run_clock import CLOCK_STOP, LIMIT_SECONDS, clock_stop, run_start_ns
 
 
 def git(root, *args):
@@ -37,9 +37,14 @@ class Session:
         replay_capture=False, capture_commit=None, replay_receipt=None,
     ):
         self.started = run_start_ns() / 1_000_000_000 if started is None else started
-        self.deadline = self.started + LIMIT_SECONDS
+        # A run that follows the live feed stops before 5 pm Eastern when its 5.75 hours would land in the
+        # 5 pm to 6 pm hour (Greg, 2026-11-24). A replay keeps the 5.75 hours: its tape is not on the wall clock.
+        follows_live = captured is not None and not replay_capture
+        self.stop_seconds, self.clock_stop = clock_stop(self.started) if follows_live else (LIMIT_SECONDS, CLOCK_STOP)
+        self.deadline = self.started + self.stop_seconds
         if time.monotonic() >= self.deadline:
-            raise PreflightDeadline("5.75-hour limit reached before paper startup")
+            raise PreflightDeadline("5.75-hour limit reached before paper startup" if self.clock_stop == CLOCK_STOP
+                                    else "the stop before 5 pm Eastern was reached before paper startup")
         self.trade_day = trade_day.isoformat()
         self.market = replay_market(market_key)
         self.data_root = Path(data_root).resolve()
@@ -144,6 +149,8 @@ class Session:
                 dipole_seconds=self.engine.inputs.dipole.width / NS,
                 exhaustion_seconds=self.engine.inputs.exhaustion.width / NS,
                 stop_seconds=LIMIT_SECONDS,
+                clock_stop_seconds=self.stop_seconds,
+                clock_stop=self.clock_stop,
                 message_budget=message_budget,
                 event_budget=output_budget,
             ),
@@ -192,7 +199,7 @@ class Session:
 
     def due(self):
         if time.monotonic() >= self.deadline:
-            return CLOCK_STOP
+            return self.clock_stop
         if self.cursor + 1 >= self.message_budget or self.events >= self.output_budget:
             return "budget reached"
         return None
@@ -203,7 +210,7 @@ class Session:
         needed = sum(1 + (e["action"] in ("open", "close", "exit")) for e in decisions)
         if time.monotonic() >= self.deadline:
             self.engine.rollback_decision_batch(before)
-            self.stop(CLOCK_STOP)
+            self.stop(self.clock_stop)
             return False
         if self.events + needed > self.output_budget:
             self.engine.rollback_decision_batch(before)
@@ -254,7 +261,7 @@ class Session:
                     self.stop_capture(message["capture_end"])
                     return None
                 if time.monotonic() >= self.deadline:
-                    self.stop(CLOCK_STOP)
+                    self.stop(self.clock_stop)
                     return None
                 if message is None:
                     self.stop("end of capture" if self.captured else "end of purchased input")
@@ -280,7 +287,7 @@ class Session:
                         if self.state != "active":
                             return None
                 if time.monotonic() >= self.deadline:
-                    self.stop(CLOCK_STOP)
+                    self.stop(self.clock_stop)
                     return None
                 self.timers_after_input.clear()
                 self.cursor = message["cursor"]
