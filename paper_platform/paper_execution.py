@@ -17,6 +17,7 @@ from nautilus_trader.model.instruments import FuturesContract
 from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.model.orders import LimitOrder, MarketOrder
 
+from .execution_policy import normalize_order_legs
 from .nautilus_book import DBN_TO_NATIVE
 
 
@@ -171,28 +172,15 @@ class PaperExecution:
     def __init__(self, plan, rules, emit):
         self.instrument = FuturesContract.from_dict(plan["instrument"])
         self.raw_id = plan["databento_instrument_id"]
-        self.policies = {key: dict(policy) for key, policy in plan["rules"].items()}
-        if not self.policies or not self.policies.keys() <= rules.keys():
+        planned = plan["rules"]
+        if not planned or not planned.keys() <= rules.keys():
             raise ValueError("execution plan contains missing or unknown strategy IDs")
+        self.policies = {rule: normalize_order_legs(rule, policy) for rule, policy in planned.items()}
         self.venues = {}
         self.followers = defaultdict(list)
         self.rules = rules
         tags = OrderTags()
         for rule, policy in self.policies.items():
-            if type(policy["contracts"]) is not int or policy["contracts"] <= 0:
-                raise ValueError(f"invalid contract quantity for {rule}")
-            for leg in ("open", "close"):
-                instruction = policy[leg]
-                if isinstance(instruction, str):
-                    instruction = {"style": instruction}
-                if not isinstance(instruction, dict) or instruction.keys() - {"style", "offset_ticks"}:
-                    raise ValueError(f"unknown order instruction for {rule} {leg}")
-                style = instruction.get("style")
-                offset = instruction.get("offset_ticks", 0)
-                if (style not in ("post", "cross", "cross_limit") or type(offset) is not int
-                        or offset < 0 or (style == "cross" and offset)):
-                    raise ValueError(f"invalid order instruction for {rule} {leg}")
-                policy[leg] = {"style": style, "offset_ticks": offset}
             parents = policy.get("entry_rules", [])
             if not isinstance(parents, list) or any(not isinstance(parent, str) for parent in parents):
                 raise ValueError(f"entry_rules must be a list of rule IDs for {rule}")

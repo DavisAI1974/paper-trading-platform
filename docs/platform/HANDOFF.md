@@ -9,21 +9,21 @@ Work in [DavisAI1974/paper-trading-platform](https://github.com/DavisAI1974/pape
 
 Use the marked checklist as the sole running list. Update the text beneath the relevant number in the same commit as the work. A draft implementation stays unchecked until the checklist's upstream or main criterion is met.
 
-## Ccode's five items
+## Work split for the five handoff items
 
-Ccode can commit and push all changes for his five items to this branch and draft PR. Fetch the latest head and integrate any concurrent commits before pushing.
+Greg transferred #17 and its two family decision agents to Codex. Ccode retains #2, #23, #26 and #35 and can commit and push those changes to this branch and draft PR. Fetch the latest head and integrate any concurrent commits before pushing.
 
-Start with **17**. Work in the order below, one number at a time. If the current item needs a decision, credential or permission only Greg can supply, record the exact blocker under that number before taking up another. Ccode owns the agents. Frankie and the agents choose placement and size for every strategy.
+Codex is on **17**. Keep work to one number at a time. If the current item needs a decision, credential or permission only Greg can supply, record the exact blocker under that number before taking up another. Ccode owns the other agents. Frankie and the assigned agents choose placement and size for every strategy.
 
 | Order | Wishlist item | Where it stands and what to do |
 | --- | --- | --- |
-| 1 | **17 · Paper execution** | Start with [the item 17 handoff on Ccode's markets-data branch](https://github.com/DavisAI1974/markets-data/blob/ccr-349e2ffe-07p8od/tasks/family-research-20261022/research-union-current/paper-trading-20261123/item17-20261124/README.md). It contains both authors' rule text and open questions, the two family briefs, shared instructions and the NGX3 definition for instrument `150611`. Ccode collects the agents' placement and size decisions for CL01–CL15 and CX01–CX15, including parent rules and parent-close instructions for the six CX managers. Commit the versioned plan under [execution_plans](../../paper_platform/execution_plans/README.md) and record unresolved rule IDs under #17. |
+| 1 | **17 · Paper execution** | Codex collected decisions from both family agents and committed the [NGX3 plan for all 30 strategies](../../paper_platform/execution_plans/ngx3-599eb8c0d48926292bbb4ef83fd518d5d2753daf.json). The [CL answers](https://github.com/DavisAI1974/markets-data/blob/599eb8c0d48926292bbb4ef83fd518d5d2753daf/tasks/family-research-20261022/research-union-current/paper-trading-20261123/item17-20261124/CL-answer.json) and [CX answers](https://github.com/DavisAI1974/markets-data/blob/599eb8c0d48926292bbb4ef83fd518d5d2753daf/tasks/family-research-20261022/research-union-current/paper-trading-20261123/item17-20261124/CX-answer.json) give each agent's reasons. The plan includes all six managers' parent decisions. Frankie's input and authorized paper execution remain pending. |
 | 2 | **2 · All 30 independent strategies** | CL01–CL15 and CX01–CX15 are in the [catalogue](../../paper_platform/rules). A configured rule gets its own venue and inventory. Use the item 17 plan to account for all 30 and finish any wiring a selected rule or manager needs. Preserve separate order, fill and trade records for each. End-to-end operation remains unproven. |
 | 3 | **23 · Budget stops, including agents** | The paper runner has message, event and 5.75-hour limits. It starts the Pushover stop notice independently of receipt and relay delivery. Ccode owns the remaining agent-run budget handling. Apply the authorized budget in the agent launcher, stop work when it is reached and route the reason to Greg's phone. If the applicable budget is unspecified, identify the missing decision. |
 | 4 | **26 · Phone notices** | Greg selected Render for the HTML/htmx phone UI and Pushover for budget stops, run stops and failures. The repo has the two Pushover Actions secret names configured. Render connection settings and actual phone receipt are outstanding. Finish the service wiring for the named events. Keep secret values in the service secret stores. Phone delivery evidence waits for permission to exercise it. [Render blueprint](../../paper_platform/render.yaml) · [Notice sender](../../paper_platform/run.py) |
 | 5 | **35 · Claude's independent review** | Codex's implementation is in this draft. Ccode owns arranging the independent Claude review after the build and recording any adjustments against their original wishlist numbers. Greg's current instruction defers checks, validation and tests. Leave the review pending during this build-only pass. |
 
-## Codex's current item
+## Earlier Codex work
 
 **27 · Per-strategy trade list.** The phone list and trades API expose first-entry and final-exit fill times, their observed bid and ask, and the order reasons. Partial liquidation stays open until the final filled contract closes. Quote-only rows retain their decision timestamps. This implementation is in draft.
 
