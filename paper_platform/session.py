@@ -135,18 +135,20 @@ class Session:
 
     def record(self, e):
         signal = self.write("signal", **e)
-        if e["action"] in ("open", "close", "exit"):
-            order_id = f"{self.run}-{signal['sequence']}"
-            self.write(
-                "paper order",
-                **e,
-                order_id=order_id,
-                signal_sequence=signal["sequence"],
-                pricing="native L3" if self.execution and e["rule"] in self.execution.venues else "open",
-                fill_price=None,
-            )
-            if self.execution:
-                self.execution.submit(e, order_id)
+        if e["action"] not in ("open", "close", "exit"):
+            return
+        sequence = signal["sequence"]
+        order_id = f"{self.run}-{sequence}"
+        if self.execution is None:
+            self.write("paper order", **e, order_id=order_id, signal_sequence=sequence,
+                       pricing="open", fill_price=None)
+            return
+        for instruction in self.execution.instructions(dict(e, signal_sequence=sequence)):
+            if self.state == "active" and (self.events >= self.output_budget
+                                           or time.monotonic() - self.started >= LIMIT_SECONDS):
+                break
+            tag = order_id if instruction["rule"] == e["rule"] else f"{order_id}-{instruction['rule']}"
+            self.execution.submit(instruction, tag)
 
     def due(self):
         if time.monotonic() - self.started >= LIMIT_SECONDS:
