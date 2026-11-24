@@ -192,6 +192,8 @@
 
   **Left for Codex, not changed.** (a) An order the stop cancels is journaled with `trade_data` true and no stop reason; the closing order and its fills are marked, the cancellation is not. (b) The flattening order takes its position and exchange time from the engine's last in-session tick and its receive time, reference and quotes from the session's last record, which can be two different records. (c) If a cancel fails at the stop, that trade's contracts are not closed; the others are. In NautilusTrader 1.231.0 the cancel is immediate for an accepted order, so this is not reached. (d) The trade's time out is taken from an administrative fill. (e) In replay the watchdog waits for the session lock while the book is checked at each new UTC file.
 
+  **Where the stop before 5 pm is in force (Claude, November 24).** The rule reads the wall clock, so it acts only on a run that follows the live feed. A run of the stored tape fed at live pace starts at the tape's 6 pm Eastern and reaches its 5.75 hours at about 11:45 pm on the tape, so it never meets the 5 pm hour. If stored-tape runs are later carried on through the rest of a trade day, the rule has to be judged on the tape's time, not the wall clock. Not built.
+
 - [x] **21.** Each run starts over new. Nothing carries over. DECIDED
 
   **Our build.** Each session receives a fresh run ID, engine, inventory and journal. [Session](../../paper_platform/session.py)
