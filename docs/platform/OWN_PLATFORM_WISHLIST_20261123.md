@@ -2,7 +2,7 @@
 
 **16 of 35 checked off.** A checked box means the requirement is supplied by NautilusTrader or implemented on main. An open box names the remaining work. The original DECIDED, OPEN and SUGGESTED labels record the November 23 wishlist. The status beneath each item records subsequent decisions and progress. [NautilusTrader comparison](NAUTILUSTRADER_COVERAGE.md) · [Draft PR 5](https://github.com/DavisAI1974/paper-trading-platform/pull/5) · [Archived original](https://github.com/DavisAI1974/markets-data/blob/111e46bc156ecf05bfa25814cea3b9c7040a5fc9/tasks/family-research-20261022/research-union-current/paper-trading-20261123/OWN_PLATFORM_WISHLIST_20261123.md)
 
-[Current build handoff](HANDOFF.md) · [Draft implementation branch](https://github.com/DavisAI1974/paper-trading-platform/tree/codex/strategy-trades-and-mbo-capture)
+[Ccode handoff for items 17, 2, 23, 26 and 35](HANDOFF.md) · [Draft implementation branch](https://github.com/DavisAI1974/paper-trading-platform/tree/codex/strategy-trades-and-mbo-capture)
 
 ## WHAT IT IS
 
