@@ -7,9 +7,10 @@ from pathlib import Path
 import time
 
 from root import tape
-from root.book import ASK, BID, Book, compare_with_restatement
+from root.book import ASK, BID, compare_with_restatement
 from root.calendar import clock_days_needed, label, trade_day_bounds
 from .market import replay_market
+from .nautilus_book import NautilusMboBook
 
 
 class HistoricalFeed:
@@ -43,7 +44,7 @@ class HistoricalFeed:
 
     def messages(self, *, paced=False):
         """Fresh independent iterator. Wall time affects delivery pace only, never signal eligibility."""
-        book = Book()
+        book = NautilusMboBook(self.week[0].instrument_ids[0])
         flags = tape.flag_bits()
         position = 0
         cursor = 0
@@ -55,6 +56,7 @@ class HistoricalFeed:
                 comparison = compare_with_restatement(book, file.records[: file.vendor_snapshot])
                 if not comparison["equal"]:
                     raise ValueError(f"{file.name}: carried book differs from opening restatement")
+                book.verify_queues(file.name)
             for index, record in enumerate(file.records):
                 fields = {k: record[k].item() for k in record.dtype.names}
                 exchange = fields["ts_event"]
