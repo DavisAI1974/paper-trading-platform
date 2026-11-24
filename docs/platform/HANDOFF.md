@@ -2,7 +2,12 @@
 
 Work in [DavisAI1974/paper-trading-platform](https://github.com/DavisAI1974/paper-trading-platform) on `codex/strategy-trades-and-mbo-capture` in [draft PR #5](https://github.com/DavisAI1974/paper-trading-platform/pull/5). The implementation handoff point is [af4ce2b](https://github.com/DavisAI1974/paper-trading-platform/commit/af4ce2b). Start from the latest branch head so subsequent commits are included.
 
-The [marked 35-item checklist](OWN_PLATFORM_WISHLIST_20261123.md) is the sole running list. It has 16 checked items. Update the text beneath the relevant number in the same commit as the work. A draft implementation stays unchecked until the checklist's upstream or main criterion is met.
+## The two lists
+
+- [Greg's original 35-item wishlist in markets-data, archived November 23](https://github.com/DavisAI1974/markets-data/blob/111e46bc156ecf05bfa25814cea3b9c7040a5fc9/tasks/family-research-20261022/research-union-current/paper-trading-20261123/OWN_PLATFORM_WISHLIST_20261123.md) preserves the original wording and decisions.
+- [Running 35-item checklist on the PR branch, with completed items checked](https://github.com/DavisAI1974/paper-trading-platform/blob/codex/strategy-trades-and-mbo-capture/docs/platform/OWN_PLATFORM_WISHLIST_20261123.md) records current progress. At handoff, 16 of 35 are checked: 3, 4, 5, 8, 10, 11, 13, 14, 15, 18, 19, 21, 22, 29, 33 and 34.
+
+Use the marked checklist as the sole running list. Update the text beneath the relevant number in the same commit as the work. A draft implementation stays unchecked until the checklist's upstream or main criterion is met.
 
 ## Ccode's five items
 
