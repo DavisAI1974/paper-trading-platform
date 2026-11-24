@@ -152,6 +152,17 @@ line here is a result.
     field lists other symbols only) while the account was short 13. The final pull is in `orders.jsonl` only.
     Someone reading the receipt alone would think the run ended flat.
 
+22. 2026-11-24, Greg. SANDBOX-ONLY ISSUES ARE PARKED: "The sandbox specific issues won't be a problem soon so don't
+    spend time on them". No time is spent on these lines; they stay written down and are dropped when the sandbox
+    is left behind: C5 (the sandbox's quirks), C8 (it refuses buys while short), C9 and C19 (it fills at the live
+    market, not at its own feed), C10 and C18 (its server errors), C11 (a filled order still reads "Live"), C13
+    (its live list holds finished orders), C14 (the account left short 13 lots: left as it is), C15 (no trade
+    closed by an order) and C20 (the start check and order 2207911).
+    STILL OURS, whatever the feed or the broker: C2 (the lines worked out again at every print), C3 (the stops
+    and windows not yet seen on real data), C4 (the hump check), C12 (the reviewer's findings not fixed), C16
+    (orders one at a time behind a queue), C17 (the order budget ends the whole run), C21 (the receipt does not
+    show what was left in the account), and everything in section A.
+
 ## D. Runs
 
 1. 2026-11-23 evening (trade day Tue Nov 24, 2026), 8:05 pm to 8:12 pm Eastern. THE FIRST RUN WITH ORDERS, on Greg's
