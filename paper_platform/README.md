@@ -1,6 +1,6 @@
 # Purchased MBO paper platform
 
-The registered market is NYMEX Henry Hub natural gas futures. Its input is the already-purchased daily DBN archive in `DavisAI1974/markets-data`. There is no feed purchase or broker connection. The 30 versioned rules are in `rules/`. CL decisions use the exchange event boundary specified by the rule. CX print-pair decisions use the next print in tape order. A management action names its originating trade and rule. Each manager has its own record of what it would do at that entry.
+The registered market is NYMEX Henry Hub natural gas futures. Its input is the already-purchased daily DBN archive in `DavisAI1974/markets-data`. The purchased replay uses the existing archive. Live capture is a separate, manually selected data input. The 30 versioned rules are in `rules/`. CL decisions use the exchange event boundary specified by the rule. CX print-pair decisions use the next print in tape order. A management action names its originating trade and rule. Each manager has its own record of what it would do at that entry.
 
 ## Market configuration and display
 
@@ -13,6 +13,16 @@ The Render service serves the HTML and read API. Server-sent events update an op
 ROOT's archive reader checks file hashes and record counts. NautilusTrader maintains the L3 order book that supplies strategy bids and asks. ROOT supplies the exchange queue rules and the source history for individual orders. At each later UTC file's restatement the reader compares the carried order IDs, FIFO order and remaining quantities before accepting further records. A fresh session rebuilds the book from Sunday, checks each later opening restatement and retains the raw record's file hash and zero-based index. The original compressed bytes stay in the purchased input archive. The receive-time sidecar holds one little-endian unsigned 64-bit replay-host nanosecond timestamp per delivered record in that same order. Signals use historical receive time. The replay host's clock controls pacing and run duration.
 
 Only a named trade day's records reach the strategy adapter. The existing research ROOT gate remains intact. Each trade record retains both quotes when available. The ledger records unpriced paper orders. Greg's fill policy is open. Each forced closing order carries its stop reason and `trade_data=false`. There is no research P&L.
+
+## MBO capture
+
+`python -m paper_platform.record_mbo` records data into a Linux checkout of `DavisAI1974/markets-data`. Its required arguments are `--data`, `--trade-day`, `--source purchased|live`, `--message-budget` and `--greg-go`. The purchased source reads the manifest-listed DBN files from the Sunday start through the named trade day. The live source subscribes to GLBX.MDP3 MBO for NG.v.0 using the account's existing Databento entitlement and the `DATABENTO_API_KEY` environment variable. It requests the week from Sunday UTC. The paper replay workflow keeps its existing input.
+
+The recorder writes `paper-trading/captures/nymex-ng/<sunday>/<source>.sqlite`. It commits each metadata block, MBO record and control record with the time the recorder received it. Purchased input retains each decompressed DBN frame. Live input retains the DBN bytes the pinned Databento client delivers to its output stream. Each connection has its own start, end and status. A hard interruption can leave the end time unknown.
+
+Restarting a source for the same week records a new connection. The recorder compares each replayed MBO record byte for byte with the committed position before it appends new positions. Repeated deliveries retain their new receive times and point to their original tape positions. UTC-file opening restatements from purchased files remain in the delivery journal. The delivery budget includes replayed records and control messages. Extending an existing capture requires a budget large enough to reach past its committed prefix.
+
+`CapturedFeed(path, trade_day).messages()` reads the committed tape. With `follow=True` it tails new positions while the recorder is active. It seats the book at the Sunday clear, carries it across UTC midnight and produces strategy inputs with the same `MboTape` code as purchased replay. Each decision source reference uses the SHA-256 of the captured MBO frame and its tape position. The recorder produces no strategy orders. Live paper-session wiring, durable storage on an Actions runner and operational recovery evidence remain open.
 
 ## Operation
 
