@@ -224,10 +224,11 @@ def main():
 
         def deliver():
             while pending:
-                event = pending.popleft()
+                event = pending[0]
                 pub.send(event)
                 if event["kind"] in ("paper order", "fill"):
                     pub.push()
+                pending.popleft()
             if time.monotonic() - pub.last_push >= 60:
                 pub.push()
 

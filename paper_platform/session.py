@@ -168,6 +168,9 @@ class Session:
             self.stop("budget reached")
             return False
         for decision in decisions:
+            if self.execution and self.events >= self.output_budget:
+                self.stop("budget reached")
+                return False
             self.record(decision)
         reason = self.due()
         if reason:
@@ -217,6 +220,9 @@ class Session:
                 if self.execution:
                     self.execution.market(message)
                 self.receives.write(struct.pack("<Q", message["received_by_capture_ns" if self.captured else "received_by_replay_ns"]))
+                if self.execution and self.events >= self.output_budget:
+                    self.stop("budget reached")
+                    return None
                 if self.captured and "live_eligible" in message and (
                     not message["live_eligible"] or self.cursor <= self.warm_through
                 ):
@@ -248,9 +254,16 @@ class Session:
                 self.journal.close()
                 files = {p.name: digest(p) for p in self.folder.iterdir() if p.is_file()}
                 receipt = dict(
-                    **self.initial, status=reason, delivered=self.cursor + 1, events=self.events, files=files
+                    **self.initial, status=reason, delivered=self.cursor + 1, events=self.events, files=files,
+                    remaining_paper_inventory=self._paper_inventory()
                 )
                 (self.folder / "receipt.json").write_text(json.dumps(receipt, indent=2), encoding="utf8")
+
+    def _paper_inventory(self):
+        if self.execution is None:
+            return {}
+        return {rule: {key: qty for key, qty in venue.inventory.items() if qty}
+                for rule, venue in self.execution.venues.items() if any(venue.inventory.values())}
 
     def status(self):
         with self.lock:
@@ -261,5 +274,6 @@ class Session:
                 cursor=self.cursor,
                 events=self.events,
                 open_positions=self.engine.position_count,
+                paper_inventory=self._paper_inventory(),
                 code_commit=self.revision,
             )
