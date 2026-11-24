@@ -82,6 +82,8 @@
 
   **Open, not changed. The storage decision stays Greg's.** (a) Between checkpoints the runner alone holds up to 60 seconds of deliveries plus one publish, and a publish copies and hashes the whole capture file, so it grows through the week. Lost with a runner in that span: the rows' own receive times (the records can be bought again, without them), the control records, and the connection's end. A smaller change that would shrink the span without a new storage service: publish only the new rows each minute. (b) The receive time is the wall clock, read after the Databento client has split the record out and after the previous record's write to disk has returned, so in a burst a stamp includes the disk time of the records before it. (c) After a drop the next run asks for the week again from Sunday; records of the gap are stored with the time of that replay, not of their first arrival, and are told apart only by where the connection's live start falls. (d) Deliveries that arrive after a stop are not stored. (e) Whether the Databento client hands on every record, heartbeats included, and whether the bytes are the gateway's own, could not be read.
 
+  **On the stored tape there is no gap (Claude, November 24).** The gap between checkpoints belongs to recording a live feed. A run of the stored tape has no recorder and no checkpoint: the tape is already stored whole. What such a run writes itself, its journal and the time it released each record, is pushed with each order and fill and each minute (item 25).
+
 - [x] **8.** Real data only. No made-up numbers, not even to test code. DECIDED
 
   **Our build.** The verification workflow uses the pinned purchased NG archive for strategy evidence. [Workflow](../../.github/workflows/verify_paper_platform.yml)
