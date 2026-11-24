@@ -26,9 +26,9 @@ class Packet(BaseModel):
     status: dict
 
 
-class QuoteBatch(BaseModel):
+class PrintBatch(BaseModel):
     run: str = Field(min_length=1, max_length=64)
-    samples: list[list[int | None]] = Field(min_length=1, max_length=2000)
+    samples: list[list[int]] = Field(min_length=1, max_length=2000)
 
 
 class JournalBatch(BaseModel):
@@ -70,7 +70,7 @@ def relay():
                 run, json_extract(body,'$.rule'), json_extract(body,'$.trade_id'), sequence
             ) WHERE json_extract(body,'$.trade_id') IS NOT NULL;
             CREATE TABLE IF NOT EXISTS sessions(run TEXT PRIMARY KEY, body TEXT NOT NULL, first_ns TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS quotes(run TEXT, received INTEGER, bid INTEGER, ask INTEGER,
+            CREATE TABLE IF NOT EXISTS prints(run TEXT, received INTEGER, price INTEGER,
                 PRIMARY KEY(run, received));
         """)
 
@@ -136,13 +136,13 @@ def relay():
                 result = append_packet(db, packet)
             return result
 
-    @app.post("/quotes", dependencies=[Depends(authorize_writer)])
-    def quote_samples(batch: QuoteBatch):
-        # For the price graph only: the best bid and best ask at one tape instant each. Never a mid.
-        if any(len(sample) != 3 or sample[0] is None for sample in batch.samples):
-            raise HTTPException(422, "a sample is a tape time, a bid and an ask")
+    @app.post("/prints", dependencies=[Depends(authorize_writer)])
+    def traded_prices(batch: PrintBatch):
+        # For the price graph only: trades of the tape, each at its own time and its own price. Never a mid.
+        if any(len(sample) != 2 for sample in batch.samples):
+            raise HTTPException(422, "a sample is a tape time and a traded price")
         with connect() as db:
-            db.executemany("INSERT OR IGNORE INTO quotes VALUES(?,?,?,?)",
+            db.executemany("INSERT OR IGNORE INTO prints VALUES(?,?,?)",
                            [(batch.run, *sample) for sample in batch.samples])
         return {"stored": len(batch.samples)}
 
@@ -188,7 +188,7 @@ def relay():
     @app.get("/api/chart", dependencies=[Depends(viewer)])
     def chart(run: str | None = None, market: str = "nymex-ng", rule: str = "", known: str = "",
               after_ns: str = "-1", after_seq: int = -1):
-        """The price graph's points since the page last asked: bid and ask samples, and this run's paper fills.
+        """The price graph's points since the page last asked: the market's traded prices and this run's paper fills.
         Times go out in milliseconds, which a browser holds exactly; the cursor stays in nanoseconds as text."""
         profiles = markets()
         if market not in profiles or (rule and rule not in profiles[market]["rules"]):
@@ -205,7 +205,7 @@ def relay():
             samples = fills = []
             if current:
                 samples = db.execute(
-                    "SELECT received,bid,ask FROM quotes WHERE run=? AND received>? ORDER BY received LIMIT 4000",
+                    "SELECT received,price FROM prints WHERE run=? AND received>? ORDER BY received LIMIT 4000",
                     (current, int(after_ns))).fetchall()
                 conditions, args = "", [current, after_seq]
                 if rule:
@@ -221,7 +221,7 @@ def relay():
                           fill["side"], fill["action"], fill["rule"], fill.get("trade_data") is not False])
         return dict(run=current or "", status=state.get("status"), scale=profile["price_scale"],
                     unit=profile["price_unit"],
-                    quotes=[[received // 1_000_000, bid, ask] for received, bid, ask in samples],
+                    prints=[[received // 1_000_000, traded] for received, traded in samples],
                     next_ns=str(samples[-1][0]) if samples else after_ns,
                     fills=marks, next_seq=fills[-1][0] if fills else after_seq)
 

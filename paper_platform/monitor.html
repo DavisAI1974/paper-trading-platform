@@ -23,10 +23,10 @@ details li{overflow-wrap:anywhere}a{color:#9ce6ba}
 $definition
 <section id="chart" data-url="$chart" aria-labelledby="chart-title" $hide_chart><h2 id="chart-title">Price</h2>
 <div id="chart-ranges" role="group" aria-label="Span of tape shown"><button type="button" data-minutes="5" aria-pressed="true">5 min</button><button type="button" data-minutes="30" aria-pressed="false">30 min</button><button type="button" data-minutes="0" aria-pressed="false">All</button></div>
-<div id="chart-box"><canvas id="chart-canvas" role="img" aria-label="Best ask and best bid over tape time, with this run's paper fills"></canvas><div id="chart-tip" hidden></div></div>
-<small><span class="sw" style="background:#d95926;margin-left:0"></span>Best ask<span class="sw" style="background:#3987e5"></span>Best bid · &#9650; paper buy · &#9660; paper sell · solid opens a trade, hollow closes one</small>
+<div id="chart-box"><canvas id="chart-canvas" role="img" aria-label="The price the market traded at over tape time, and the prices of this run's paper fills"></canvas><div id="chart-tip" hidden></div></div>
+<small><span class="sw" style="background:#3987e5;margin-left:0"></span>Market traded price<span class="sw" style="background:#d95926"></span>Our paper fills · &#9650; our buy · &#9660; our sell · solid opens a trade, hollow closes one</small>
 <small id="chart-last" role="status"></small>
-<small>Tape time on the Eastern clock. One point for each second of tape: the best bid and the best ask at the first message of that second. No mid price is drawn or computed.</small></section>
+<small>Tape time on the Eastern clock, drawn as the tape goes by. Market line: the last trade of each second of tape that has one, at its own price. Our line: each paper fill at its own price. Each curve passes through every one of its points; the bends between points are drawing only. No mid price is drawn or computed.</small></section>
 $trade_section
 <section id="events" data-stream="$stream" aria-label="Trading events">$cards</section>
 <div id="earlier-events">$earlier</div>
@@ -92,10 +92,10 @@ const box=document.getElementById('chart');
 if(!box||!box.dataset.url) return;
 const canvas=document.getElementById('chart-canvas'),ctx=canvas.getContext('2d');
 const tip=document.getElementById('chart-tip'),last=document.getElementById('chart-last');
-const INK='#edf1ee',MUTED='#b5c6c5',GRID='#344146',SURFACE='#10191c',ASK='#d95926',BID='#3987e5';
-let quotes=[],fills=[],run='',nextNs='-1',nextSeq=-1,scale=1,unit='',minutes=5,pointer=null,busy=false,view=null;
+const INK='#edf1ee',MUTED='#b5c6c5',GRID='#344146',SURFACE='#10191c',MARKET='#3987e5',OURS='#d95926';
+let prints=[],fills=[],run='',nextNs='-1',nextSeq=-1,scale=1,unit='',minutes=5,pointer=null,busy=false,view=null;
 const clock=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
-const price=v=>v===null?'none':(v/scale).toFixed(3);
+const price=v=>(v/scale).toFixed(3);
 function triangle(x,y,up,solid){
   const r=5,d=up?1:-1;
   ctx.beginPath();ctx.moveTo(x,y-d*r);ctx.lineTo(x+r,y+d*r);ctx.lineTo(x-r,y+d*r);ctx.closePath();
@@ -103,16 +103,46 @@ function triangle(x,y,up,solid){
   ctx.fillStyle=solid?INK:SURFACE;ctx.fill();
   ctx.lineWidth=1.5;ctx.strokeStyle=INK;ctx.stroke();
 }
+function curve(series,x,y,color){
+  // A smooth line through every point that never rises above or dips below the two points it joins.
+  const pts=[];
+  for(const row of series){
+    const px=x(row[0]),py=y(row[1]);
+    if(pts.length&&px-pts[pts.length-1][0]<0.5) pts[pts.length-1][1]=py; else pts.push([px,py]);
+  }
+  const n=pts.length;
+  if(!n) return;
+  ctx.strokeStyle=color;ctx.lineWidth=2;ctx.lineJoin='round';ctx.lineCap='round';
+  ctx.beginPath();ctx.moveTo(pts[0][0],pts[0][1]);
+  if(n===1){ctx.arc(pts[0][0],pts[0][1],1,0,7);ctx.stroke();return}
+  const d=[],m=[];
+  for(let i=0;i<n-1;i++) d.push((pts[i+1][1]-pts[i][1])/(pts[i+1][0]-pts[i][0]));
+  m.push(d[0]);
+  for(let i=1;i<n-1;i++) m.push(d[i-1]*d[i]<=0?0:(d[i-1]+d[i])/2);
+  m.push(d[n-2]);
+  for(let i=0;i<n-1;i++){
+    if(d[i]===0){m[i]=0;m[i+1]=0;continue}
+    const a=m[i]/d[i],b=m[i+1]/d[i],s=a*a+b*b;
+    if(s>9){const k=3/Math.sqrt(s);m[i]=k*a*d[i];m[i+1]=k*b*d[i]}
+  }
+  for(let i=0;i<n-1;i++){
+    const dx=(pts[i+1][0]-pts[i][0])/3;
+    ctx.bezierCurveTo(pts[i][0]+dx,pts[i][1]+m[i]*dx,pts[i+1][0]-dx,pts[i+1][1]-m[i+1]*dx,pts[i+1][0],pts[i+1][1]);
+  }
+  ctx.stroke();
+}
 function draw(){
   const ratio=window.devicePixelRatio||1,w=canvas.clientWidth,h=canvas.clientHeight;
   if(canvas.width!==Math.round(w*ratio)||canvas.height!==Math.round(h*ratio)){canvas.width=Math.round(w*ratio);canvas.height=Math.round(h*ratio)}
   ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,w,h);view=null;
-  if(!quotes.length){last.textContent=run?'No quote sample has reached the page for this run.':'';tip.hidden=true;return}
-  const end=quotes[quotes.length-1][0],first=quotes[0][0],start=minutes?Math.max(first,end-minutes*60000):first;
-  const shown=quotes.filter(q=>q[0]>=start),marks=fills.filter(f=>f[0]>=start&&f[0]<=end);
+  if(!prints.length&&!fills.length){last.textContent=run?'No traded price has reached the page for this run yet.':'';tip.hidden=true;return}
+  const newest=Math.max(prints.length?prints[prints.length-1][0]:0,fills.length?fills[fills.length-1][0]:0);
+  const oldest=Math.min(prints.length?prints[0][0]:newest,fills.length?fills[0][0]:newest);
+  const end=newest,start=minutes?Math.max(oldest,end-minutes*60000):oldest;
+  const market=prints.filter(p=>p[0]>=start),ours=fills.filter(f=>f[0]>=start);
   let lo=Infinity,hi=-Infinity;
-  for(const q of shown) for(const v of [q[1],q[2]]) if(v!==null){lo=Math.min(lo,v);hi=Math.max(hi,v)}
-  for(const f of marks){lo=Math.min(lo,f[1]);hi=Math.max(hi,f[1])}
+  for(const row of market){lo=Math.min(lo,row[1]);hi=Math.max(hi,row[1])}
+  for(const row of ours){lo=Math.min(lo,row[1]);hi=Math.max(hi,row[1])}
   if(lo===Infinity) return;
   const pad=Math.max((hi-lo)*0.08,scale/1000);lo-=pad;hi+=pad;
   const L=6,R=w-52,T=8,B=h-20,span=Math.max(end-start,1);
@@ -126,37 +156,34 @@ function draw(){
   ctx.textBaseline='alphabetic';ctx.fillStyle=MUTED;
   ctx.textAlign='left';ctx.fillText(clock.format(new Date(start)),L,h-5);
   ctx.textAlign='right';ctx.fillText(clock.format(new Date(end)),R,h-5);
-  for(const [index,color] of [[2,ASK],[1,BID]]){
-    ctx.strokeStyle=color;ctx.lineWidth=2;ctx.lineJoin='round';ctx.beginPath();
-    let open=false,py=0;
-    for(const q of shown){
-      const v=q[index];
-      if(v===null){open=false;continue}
-      const qx=x(q[0]),qy=y(v);
-      if(open){ctx.lineTo(qx,py);ctx.lineTo(qx,qy)}else{ctx.moveTo(qx,qy);open=true}
-      py=qy;
-    }
-    if(open) ctx.lineTo(R,py);
-    ctx.stroke();
-  }
-  for(const f of marks) triangle(x(f[0]),y(f[1]),f[2]==='buy',f[3]==='open');
-  const newest=quotes[quotes.length-1];
-  last.textContent='Last sample · ask '+price(newest[2])+' · bid '+price(newest[1])+' '+unit+' · '+clock.format(new Date(newest[0]))+' Eastern, tape time';
-  view={shown,x,L,R,T,B};
+  curve(market,x,y,MARKET);
+  curve(ours,x,y,OURS);
+  if(ours.length<=120) for(const f of ours) triangle(x(f[0]),y(f[1]),f[2]==='buy',f[3]==='open');
+  const words=[];
+  if(prints.length){const p=prints[prints.length-1];words.push('Market last traded '+price(p[1])+' at '+clock.format(new Date(p[0])))}
+  if(fills.length){const f=fills[fills.length-1];words.push('our last fill '+price(f[1])+' ('+f[4]+' '+f[2]+') at '+clock.format(new Date(f[0])))}
+  last.textContent=words.join(' · ')+' · '+unit+', Eastern tape time'+(ours.length>120?' · fill marks are hidden while more than 120 fills are in view':'');
+  view={market,ours,x,T,B};
   hover();
 }
+function nearest(series){
+  let best=null;
+  for(const row of series) if(best===null||Math.abs(view.x(row[0])-pointer)<Math.abs(view.x(best[0])-pointer)) best=row;
+  return best;
+}
 function hover(){
-  if(!view||pointer===null||!view.shown.length){tip.hidden=true;return}
-  let near=view.shown[0];
-  for(const q of view.shown) if(Math.abs(view.x(q[0])-pointer)<Math.abs(view.x(near[0])-pointer)) near=q;
-  const hx=Math.round(view.x(near[0]))+0.5;
+  if(!view||pointer===null){tip.hidden=true;return}
+  const m=nearest(view.market),f=nearest(view.ours),anchor=m||f;
+  if(!anchor){tip.hidden=true;return}
+  const hx=Math.round(view.x(anchor[0]))+0.5;
   ctx.strokeStyle=MUTED;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(hx,view.T);ctx.lineTo(hx,view.B);ctx.stroke();
   tip.replaceChildren();
-  for(const [label,value] of [['ask',price(near[2])],['bid',price(near[1])]]){
-    const strong=document.createElement('b');strong.textContent=value;
-    tip.append(strong,' '+label+' · ');
+  if(m){const strong=document.createElement('b');strong.textContent=price(m[1]);tip.append(strong,' market traded · '+clock.format(new Date(m[0])))}
+  if(f){
+    if(m) tip.append(document.createElement('br'));
+    const strong=document.createElement('b');strong.textContent=price(f[1]);
+    tip.append(strong,' our fill · '+f[4]+' '+f[2]+' · '+clock.format(new Date(f[0])));
   }
-  tip.append(clock.format(new Date(near[0]))+' Eastern');
   tip.hidden=false;
 }
 canvas.addEventListener('pointermove',event=>{pointer=event.offsetX;draw()});
@@ -178,9 +205,9 @@ async function poll(){
     const response=await fetch(url,{headers:{Accept:'application/json'}});
     if(response.ok){
       const data=await response.json();
-      if(data.run!==run){quotes=[];fills=[];run=data.run}
+      if(data.run!==run){prints=[];fills=[];run=data.run}
       scale=data.scale;unit=data.unit;nextNs=data.next_ns;nextSeq=data.next_seq;
-      for(const q of data.quotes) quotes.push(q);
+      for(const p of data.prints) prints.push(p);
       for(const f of data.fills) fills.push(f);
       draw();
     }
