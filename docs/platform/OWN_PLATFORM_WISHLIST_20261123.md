@@ -56,7 +56,7 @@
 
 - [ ] **12.** Replay mode: the same platform runs a stored trade day's tape, tick by tick, with the same code as live. SUGGESTED
 
-  **Built in draft, awaiting parity evidence.** The manual replay workflow defaults to the pinned purchased NG archive. It can also restore a weekly purchased or live MBO checkpoint from markets-data and feed its records through the same book, calculations and native venues. For a recorded live run, its receipt supplies the agent plan, first eligible cursor, last processed frame and stop reason. Replay seats from Sunday, warms through the original start, and caps delivery at the original endpoint. It records the checkpoint commit and original run ID. Receipts predating the eligibility field support whole-tape replay only. A comparison of an authorized live run with its stored replay is still outstanding.
+  **Built in draft, awaiting parity evidence.** The manual replay workflow defaults to the pinned purchased NG archive. It can also restore a weekly purchased or live MBO checkpoint from markets-data and feed its records through the same book, calculations and native venues. For receipt replay the workflow loads the original platform commit and installs its requirements. The selected Git ref must contain that commit. The live receipt supplies the agent plan, first eligible cursor, last processed frame and stop reason. Replay seats from Sunday, warms through the original start, and caps delivery at the original endpoint. It records the checkpoint commit and original run ID. Receipts predating the eligibility field support whole-tape replay only. A comparison of an authorized live run with its stored replay is still outstanding.
 
 ## THE RULES OF THE HOUSE
 

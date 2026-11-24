@@ -56,6 +56,8 @@ class Session:
         self.revision = git(code, "rev-parse", "HEAD")
         if git(code, "status", "--porcelain", "--", "paper_platform", "root", "crypto_ng"):
             raise ValueError("the running rules and calculation code must be committed")
+        if replay_receipt is not None and replay_receipt["code_commit"] != self.revision:
+            raise ValueError("receipt replay must run at the original platform commit")
         catalogue_rules = catalogue()
         self.rules = {key: catalogue_rules[key] for key in self.market["rules"]}
         self.execution = None
