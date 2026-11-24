@@ -657,3 +657,41 @@ def test_the_book_must_be_the_session_readers_book_at_the_signals_own_message():
     assert ask(SimpleNamespace(last_sequence=5, orders={7: held}, sides=sides), gone)[0] is None
     # the session's last message is not the signal's own
     assert ask(SimpleNamespace(last_sequence=5, orders={}, sides=sides), _stand_last_message(position=10))[0] is None
+
+
+def test_conditions_hold_each_named_item_and_no_label():
+    from types import SimpleNamespace
+    from root.calendar import trade_day_bounds
+    from datetime import date
+    opens, halts = trade_day_bounds(date(2023, 10, 2))  # a calendar fact, not market data
+    start, end = opens + 20 * 3600 * 10**9, opens + 20 * 3600 * 10**9 + 120 * 10**9
+    tick = dict(position=11, received=opens - 5, exchange=opens - 7, settlement=False)  # before the open: negative
+    inputs = _Stand(a=1, start=start, end=end, end_of_day=halts)
+    s = _state_session(tick, inputs)
+    s.trade_day, s.paced_from_ns = "2023-10-02", opens - 100
+    s.market = dict(price_scale=10**9, price_unit="USD/MMBtu", contract_size=10000, contract_unit="MMBtu")
+    plan = dict(databento_instrument_id=1, instrument=dict(raw_symbol="STAND", price_increment="0.001", multiplier="10000",
+                maker_fee="0", taker_fee="0", margin_init="0", margin_maint="0", expiration_ns=halts + 10))
+    s.initial = dict(execution_plan=plan)
+    s._mbo_counts = dict(stepped=4, in_trade_day=0)
+    state, why = s._state_at(dict(position=11, received=opens - 5))
+    c = state["conditions"]
+    cal = c["calendar"]
+    assert why is None and cal["weekday"] == "Monday" and cal["trade_day"] == "2023-10-02"
+    assert cal["since_open_ns"] == dict(exchange=-7, received=-5)  # negative stays negative
+    assert cal["until_settle_start_ns"]["received"] == start - (opens - 5) and cal["until_halt_ns"]["exchange"] == halts - opens + 7
+    assert cal["in_settlement_window"] is False and cal["since_paced_start_ns"] == dict(received=95)
+    assert cal["open_ns"] == opens and cal["halt_ns"] == halts and cal["settle_end_ns"] == end
+    assert c["counts"] == dict(stepped=4, in_trade_day=0)
+    ins = c["instrument"]
+    assert ins["raw_symbol"] == "STAND" and ins["price_increment_in_tape_units"] == 1_000_000
+    assert ins["until_expiration_ns"] == dict(exchange=halts + 10 - (opens - 7), received=halts + 10 - (opens - 5))
+    assert not {"maker_fee", "taker_fee", "margin_init", "margin_maint"} & set(ins)
+    assert c["units"]["price_scale"] == 10**9 and c["market"]["price_unit"] == "USD/MMBtu"
+    assert not any("mid" in k or "regime" in k or "label" in k for k in c)
+    # a run with no plan and no counters: nulls, named, no raise
+    s.initial = dict(execution_plan=None)
+    s._mbo_counts = None
+    state, why = s._state_at(dict(position=11, received=opens - 5))
+    assert why is None and state["conditions"]["instrument"] is None and state["conditions"]["counts"] is None
+    assert any(x["name"] == "conditions.instrument" for x in state["left_out"])

@@ -645,8 +645,9 @@ class Session:
             left_out.append(dict(name="paper.venues.*.engine", reason="each venue's native Nautilus matching-engine book "
                                  "and its queue positions are not read: the accessors are not confirmed read-only"))
             mbo_window = self._mbo_window_state(t, left_out)
+            conditions = self._conditions_state(t, left_out)
             state = dict(inputs=inputs, book=book, rules=rules, paper=paper, mbo_window=mbo_window,
-                         known_at_tape_ns=t["received"], left_out=left_out)
+                         conditions=conditions, known_at_tape_ns=t["received"], left_out=left_out)
             json.dumps(state, allow_nan=False)  # plain JSON or nothing
             return state, None
         except Exception as error:
@@ -677,6 +678,74 @@ class Session:
             return dict(detail="the book's entry for the message's order differs from the message's own order change",
                         book_order=now, message_order=expected)
         return None
+
+    def _conditions_state(self, t, left_out):
+        """The market conditions the run can state at this tick, each as a named fact. No label, class or judgement.
+
+        All times are UTC nanoseconds as the tape and root/calendar.py give them; the differences are signed and
+        negative stays negative (before the open, before the settle window). Each item is read in its own try.
+        """
+        out = {}
+
+        def take(name, read):
+            try:
+                got = _plain(read(), "conditions." + name, left_out)
+            except Exception as error:
+                left_out.append(dict(name="conditions." + name, reason=f"reading it raised {type(error).__name__}"))
+                return
+            if got is not _LEFT:
+                out[name] = got
+
+        def calendar():
+            from datetime import date
+            from root.calendar import eastern_text, trade_day_bounds
+            day = date.fromisoformat(self.trade_day)
+            opens, halts = trade_day_bounds(day)
+            inputs = self.engine.inputs
+            return dict(
+                trade_day=self.trade_day, weekday=day.strftime("%A"),
+                exchange_ns=t["exchange"], received_ns=t["received"],
+                exchange_eastern=eastern_text(t["exchange"]), received_eastern=eastern_text(t["received"]),
+                in_settlement_window=t["settlement"],
+                open_ns=opens, halt_ns=halts, settle_start_ns=inputs.start, settle_end_ns=inputs.end,
+                end_of_day_ns=inputs.end_of_day,
+                since_open_ns=dict(exchange=t["exchange"] - opens, received=t["received"] - opens),
+                until_settle_start_ns=dict(exchange=inputs.start - t["exchange"], received=inputs.start - t["received"]),
+                until_settle_end_ns=dict(exchange=inputs.end - t["exchange"], received=inputs.end - t["received"]),
+                until_halt_ns=dict(exchange=halts - t["exchange"], received=halts - t["received"]),
+                since_paced_start_ns=None if self.paced_from_ns is None else dict(
+                    received=t["received"] - self.paced_from_ns))
+
+        take("calendar", calendar)
+        take("counts", lambda: None if self._mbo_counts is None else dict(self._mbo_counts))
+
+        def instrument():
+            plan = self.initial["execution_plan"]
+            if plan is None:
+                left_out.append(dict(name="conditions.instrument", reason="the run has no execution plan"))
+                return None
+            from decimal import Decimal
+            held = plan["instrument"]
+            cost = ("maker_fee", "taker_fee", "margin_init", "margin_maint")
+            left_out.append(dict(name="conditions.instrument." + "/".join(cost),
+                                 reason="trade cost terms; no cost enters any output"))
+            fields = {k: v for k, v in held.items() if k not in cost}
+            fields["databento_instrument_id"] = plan["databento_instrument_id"]
+            scale = self.market["price_scale"]
+            fields["price_increment_in_tape_units"] = int(Decimal(held["price_increment"]) * scale)
+            if held.get("expiration_ns") is not None:
+                fields["until_expiration_ns"] = dict(
+                    exchange=held["expiration_ns"] - t["exchange"], received=held["expiration_ns"] - t["received"])
+            return fields
+
+        take("instrument", instrument)
+        take("units", lambda: dict(
+            price="the tape's integer price units: price_scale of them make 1 " + self.market["price_unit"],
+            price_scale=self.market["price_scale"], price_unit=self.market["price_unit"],
+            size="contracts, as the tape's size field", contract_size=self.market["contract_size"],
+            contract_unit=self.market["contract_unit"], time="UTC nanoseconds"))
+        take("market", lambda: self.market)
+        return out
 
     def _decider_window_init(self, seconds):
         """Decider only. The window of raw messages kept for the question, a declared input of the trial."""
