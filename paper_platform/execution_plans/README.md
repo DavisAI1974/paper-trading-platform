@@ -31,3 +31,5 @@ The output is `paper_platform/execution_plans/ngx3-<full-markets-data-commit>.js
 ## A plan with the give-back exit
 
 `ngx3-12be6ea6e40347def5f574b1c2f36093bba99200-giveback20.json` is the committed family-agent plan above with one entry added, `"exit": {"give_back_fraction": "0.2"}`, on Greg's word of November 24. Every rule's placement, size and manager entries are the agents', unchanged. With the entry, each paper trade is closed when its open profit falls back by that part of its highest, and a rule's own close sends no order. What that leaves open is written under item 17 of the checklist. The plan without the entry is still the one to select for a run of the rules' own closes.
+
+`ngx3-12be6ea6e40347def5f574b1c2f36093bba99200-giveback20-both.json` is the same again with `"also_before_profit": true`, on Greg's word the same day: the 20% is also taken off the best open result of a trade that has never been in profit, so such a trade is closed too.

@@ -194,9 +194,14 @@ class PaperExecution:
         exit_policy = plan.get("exit")
         self.give_back = None
         if exit_policy is not None:
-            if not isinstance(exit_policy, dict) or exit_policy.keys() != {"give_back_fraction"} or run is None:
-                raise ValueError("the plan's exit takes give_back_fraction alone, and the run's ID for its order tags")
+            if (not isinstance(exit_policy, dict) or "give_back_fraction" not in exit_policy or run is None
+                    or exit_policy.keys() - {"give_back_fraction", "also_before_profit"}
+                    or type(exit_policy.get("also_before_profit", False)) is not bool):
+                raise ValueError("the plan's exit takes give_back_fraction and also_before_profit, "
+                                 "and the run's ID for its order tags")
             self.give_back = Fraction(str(exit_policy["give_back_fraction"]))
+            # Greg, 2026-11-24: "make same 20% for trades that never get positive".
+            self.also_before_profit = exit_policy.get("also_before_profit", False)
             if not 0 < self.give_back < 1:
                 raise ValueError("give_back_fraction is a part of the highest profit, above 0 and below 1")
         self.instrument = FuturesContract.from_dict(plan["instrument"])
@@ -283,8 +288,10 @@ class PaperExecution:
         The open profit of a trade is what its own fills paid and took, plus what its contracts would fetch
         now on the side they would be closed at: the best bid for contracts held long, the best ask for
         contracts held short. No mid. It is read at each message, on that message's own book, and the order
-        goes at that message's time. The exit is armed only once the highest open profit is above zero; a
-        trade that never shows a profit is not closed by it and is held until the run stops.
+        goes at that message's time. Without `also_before_profit` the exit is armed only once the highest open
+        profit is above zero, and a trade that never shows a profit is held until the run stops. With it the
+        same part is taken off the trade's best open result whatever its sign: a trade whose best was a loss
+        of 0.004 is closed when its open result reaches that loss and a fifth more.
         """
         for rule, venue in self.venues.items():
             for key in sorted(venue.holding):
@@ -295,13 +302,16 @@ class PaperExecution:
                 profit = venue.cash[key] + held * quote
                 peak = max(venue.peak.get(key, profit), profit)
                 venue.peak[key] = peak
-                if peak <= 0 or profit > peak * (1 - self.give_back):
+                if peak <= 0 and not self.also_before_profit:
+                    continue
+                if profit >= peak or profit > peak - self.give_back * abs(peak):
                     continue
                 venue.exit_attempts[key] += 1
                 event = dict(rule=rule, trade_id=key, action="close", received=received, reference=reference,
                              bid=msg["best_bid"], ask=msg["best_ask"], side="buy" if held > 0 else "sell",
                              exit_policy="give back", highest_open_profit=peak, open_profit=profit,
-                             reason=f"gave back {float(self.give_back):.0%} of its highest open profit")
+                             reason=(f"gave back {float(self.give_back):.0%} of its highest open profit" if peak > 0
+                                     else f"fell {float(self.give_back):.0%} below its best open result, never in profit"))
                 venue.submit(event, {"style": "cross", "offset_ticks": 0}, abs(held),
                              f"{self.run}-giveback-{rule}-{key}-{venue.exit_attempts[key]}")
 

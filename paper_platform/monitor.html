@@ -24,7 +24,7 @@ $definition
 <section id="chart" data-url="$chart" aria-labelledby="chart-title" $hide_chart><h2 id="chart-title">Price</h2>
 <div id="chart-ranges" role="group" aria-label="Span of tape shown"><button type="button" data-minutes="5" aria-pressed="true">5 min</button><button type="button" data-minutes="30" aria-pressed="false">30 min</button><button type="button" data-minutes="0" aria-pressed="false">All</button></div>
 <div id="chart-box"><canvas id="chart-canvas" role="img" aria-label="The price the market traded at over tape time, and the prices of this run's paper fills"></canvas><div id="chart-tip" hidden></div></div>
-<small><span class="sw" style="background:#3987e5;margin-left:0"></span>Market traded price<span class="sw" style="background:#d95926"></span>Our paper fills · &#9650; our buy · &#9660; our sell · solid opens a trade, hollow closes one</small>
+<small><span class="sw" style="background:#3987e5;margin-left:0"></span>Market traded price<span class="sw" style="background:#d95926"></span>Our paper fills</small>
 <small id="chart-last" role="status"></small>
 <small>Tape time on the Eastern clock, drawn as the tape goes by. Market line: the last trade of each second of tape that has one, at its own price. Our line: each paper fill at its own price. Each line stays level at its last price until the next one, as a price does between trades; only the corners are rounded. No mid price is drawn or computed.</small></section>
 $trade_section
@@ -92,17 +92,10 @@ const box=document.getElementById('chart');
 if(!box||!box.dataset.url) return;
 const canvas=document.getElementById('chart-canvas'),ctx=canvas.getContext('2d');
 const tip=document.getElementById('chart-tip'),last=document.getElementById('chart-last');
-const INK='#edf1ee',MUTED='#b5c6c5',GRID='#344146',SURFACE='#10191c',MARKET='#3987e5',OURS='#d95926';
+const MUTED='#b5c6c5',GRID='#344146',SURFACE='#10191c',MARKET='#3987e5',OURS='#d95926';
 let prints=[],fills=[],run='',nextNs='-1',nextSeq=-1,scale=1,unit='',minutes=5,pointer=null,busy=false,view=null;
 const clock=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
 const price=v=>(v/scale).toFixed(3);
-function triangle(x,y,up,solid){
-  const r=3,d=up?1:-1;
-  ctx.beginPath();ctx.moveTo(x,y-d*r);ctx.lineTo(x+r,y+d*r);ctx.lineTo(x-r,y+d*r);ctx.closePath();
-  ctx.lineWidth=2.5;ctx.strokeStyle=SURFACE;ctx.stroke();
-  ctx.fillStyle=solid?INK:SURFACE;ctx.fill();
-  ctx.lineWidth=1;ctx.strokeStyle=INK;ctx.stroke();
-}
 function curve(series,x,y,color,right){
   // The last price holds level until the next one, as a price does between trades; only the corners are rounded.
   const pts=[];
@@ -148,11 +141,10 @@ function draw(){
   ctx.textAlign='right';ctx.fillText(clock.format(new Date(end)),R,h-5);
   curve(market,x,y,MARKET,R);
   curve(ours,x,y,OURS,R);
-  if(ours.length<=120) for(const f of ours) triangle(x(f[0]),y(f[1]),f[2]==='buy',f[3]==='open');
   const words=[];
   if(prints.length){const p=prints[prints.length-1];words.push('Market last traded '+price(p[1])+' at '+clock.format(new Date(p[0])))}
   if(fills.length){const f=fills[fills.length-1];words.push('our last fill '+price(f[1])+' ('+f[4]+' '+f[2]+') at '+clock.format(new Date(f[0])))}
-  last.textContent=words.join(' · ')+' · '+unit+', Eastern tape time'+(ours.length>120?' · fill marks are hidden while more than 120 fills are in view':'');
+  last.textContent=words.join(' · ')+' · '+unit+', Eastern tape time';
   view={market,ours,x,T,B};
   hover();
 }
