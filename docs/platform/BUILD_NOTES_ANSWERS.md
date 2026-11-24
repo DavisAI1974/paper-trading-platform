@@ -2,3 +2,5 @@
 2026-11-24 piece 2 done: session takes and applies answers (session.py; one clause in paper_execution.py instructions). Piece 3 done: --answers in trial.py and run.py. Next: piece 4, the words in paper_platform/README.md.
 2026-11-24 piece 4 done: README section 'Answers taken during a run'. All four pieces committed locally; nothing run on tape.
 2026-11-24 piece 2b done: take/skip, the gate in Session.record, MailboxDecider, --decider-mailbox in trial.py, README. Not run on tape.
+2026-11-24 review fixes 1, 2, 5 (86ecd21): a bad answer never stops a run; a close by answer closes the paper trade only (no engine change, no signal row). Not run on tape.
+2026-11-24 review fixes 3, 4, 6, 7, 8: decider wait taken out of the run's clock (waited_ns), event precheck counts question and answer rows, used mailbox folder refused, README words, 16 checks in test_answers.py. Not run on tape.

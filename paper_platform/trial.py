@@ -140,6 +140,14 @@ def figures(rows, lines):
     )
 
 
+def mailbox_used(folder):
+    """The first q-* entry already in a decider's folder, or None. A used question folder would refuse its sequence."""
+    folder = Path(folder)
+    if not folder.is_dir():
+        return None
+    return next((entry.name for entry in sorted(folder.glob("q-*"))), None)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--data", type=Path, required=True, help="a markets-data checkout holding the stored tape")
@@ -164,6 +172,10 @@ def main():
         parser.error("--answer-close needs --answers")
     if args.decider_timeout_s <= 0:
         parser.error("the decider's timeout is a positive number of seconds")
+    if args.decider_mailbox:
+        used = mailbox_used(args.decider_mailbox)
+        if used:
+            parser.error(f"--decider-mailbox {args.decider_mailbox} already holds {used}: use a folder no trial has used")
     if args.answers:
         refusal = TimedAnswers.check(args.answers)
         if refusal:

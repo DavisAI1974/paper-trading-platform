@@ -41,6 +41,7 @@ class Session:
         # A decider (answers.py) is asked at each opening signal of a rule the plan trades; None = no gate.
         self.decider = decider
         self.decided = dict(asked=0, take=0, skip=0, none=0)
+        self.waited_ns = 0  # wall time blocked in decider.ask; taken out of the run's clock
         self.decider_hash = hashlib.sha256()
         # Answers from outside (see answers.py): with none plugged in (answers=None) nothing below runs.
         self.answers = answers
@@ -236,8 +237,13 @@ class Session:
             tag = order_id if instruction["rule"] == e["rule"] else f"{order_id}-{instruction['rule']}"
             self.execution.submit(instruction, tag)
 
+    def _late(self):
+        # The time spent waiting for a decider is not the run's time. With no decider waited_ns is 0 and this is
+        # the same comparison as before (x - 0.0 == x).
+        return time.monotonic() - self.waited_ns / 1_000_000_000 >= self.deadline
+
     def due(self):
-        if time.monotonic() >= self.deadline:
+        if self._late():
             return self.clock_stop
         if self.cursor + 1 >= self.message_budget or self.events >= self.output_budget:
             return "budget reached"
@@ -246,8 +252,8 @@ class Session:
     def _apply(self, decide, value, *, timer=False):
         before = self.engine.begin_decision_batch()
         decisions = decide(value)
-        needed = sum(1 + (e["action"] in ("open", "close", "exit")) for e in decisions)
-        if time.monotonic() >= self.deadline:
+        needed = sum(1 + (e["action"] in ("open", "close", "exit")) + 2 * self._gated(e) for e in decisions)
+        if self._late():
             self.engine.rollback_decision_batch(before)
             self.stop(self.clock_stop)
             return False
@@ -299,7 +305,7 @@ class Session:
                 if message is not None and "capture_end" in message:
                     self.stop_capture(message["capture_end"])
                     return None
-                if time.monotonic() >= self.deadline:
+                if self._late():
                     self.stop(self.clock_stop)
                     return None
                 if message is None:
@@ -330,7 +336,7 @@ class Session:
                         self.advance_clock(expiry)
                         if self.state != "active":
                             return None
-                if time.monotonic() >= self.deadline:
+                if self._late():
                     self.stop(self.clock_stop)
                     return None
                 self.timers_after_input.clear()
@@ -425,7 +431,8 @@ class Session:
             failure = None
         except Exception as error:
             given, failure = None, f"the decider raised {type(error).__name__}"
-        latency = time.monotonic_ns() - started  # wall time, recorded only; never added to a tape time
+        latency = time.monotonic_ns() - started  # wall time; recorded, and taken out of the run's clock (_late)
+        self.waited_ns += latency
         if failure is None:
             failure = validate_decision(given, sequence)
         if failure is not None:
@@ -444,6 +451,11 @@ class Session:
         self.write("answer", action=action, asked_at_sequence=sequence, applied=action in ("take", "skip"),
                    latency_ns=latency, tape_received_ns=e.get("received"), **fields)
         return action == "take"
+
+    def _gated(self, e):
+        """True when `record` will ask the decider about this decision: it adds a question row and an answer row."""
+        return (self.decider is not None and e["action"] == "open" and self.liquidation_available
+                and e["rule"] not in self.answers_off and self._orders_for(e["rule"]))
 
     def _orders_for(self, rule):
         if self.execution is None:
@@ -509,7 +521,7 @@ class Session:
                     not_applied=self.answers_taken - self.answers_applied,
                     waiting_at_stop=self.answers.waiting() if self.answers is not None else 0,
                     sha256=self.answers_hash.hexdigest(),
-                    decider=dict(on=self.decider is not None, **self.decided,
+                    decider=dict(on=self.decider is not None, **self.decided, waited_ns=self.waited_ns,
                                  sha256=self.decider_hash.hexdigest()),
                     causal_check_covers="the rules' decisions without answers")
 
