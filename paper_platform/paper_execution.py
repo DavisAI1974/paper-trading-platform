@@ -66,7 +66,9 @@ class RuleVenue:
         else:
             self.emit("order status", **data, reason=str(getattr(event, "reason", type(event).__name__)))
 
-    def submit(self, event, style, quantity, order_id):
+    def submit(self, event, placement, quantity, order_id):
+        style = placement["style"]
+        offset = placement["offset_ticks"]
         key, action = event["trade_id"], event["action"]
         self.reference, self.received = event["reference"], event["received"]
         self.clock.set_time(self.received)
@@ -83,21 +85,32 @@ class RuleVenue:
         kwargs = dict(trader_id=self.trader, strategy_id=self.strategy, instrument_id=self.instrument.id,
                       client_order_id=ClientOrderId(order_id), order_side=side, quantity=Quantity.from_int(quantity),
                       ts_init=self.received, init_id=UUID4())
-        if style == "post":
-            quote = event["bid" if side == OrderSide.BUY else "ask"]
+        limit = None
+        if style in ("post", "cross_limit"):
+            buy = side == OrderSide.BUY
+            same_side = style == "post"
+            field = "bid" if buy == same_side else "ask"
+            quote = event[field]
             if quote is None:
                 self.emit("order status", rule=self.rule, trade_id=key, order_id=order_id, action=action,
-                          received=self.received, reference=self.reference, reason="No same-side quote to post")
+                          received=self.received, reference=self.reference, reason=f"No {field} for {style} order")
                 return
-            order = LimitOrder(**kwargs, price=Price.from_raw(quote * DBN_TO_NATIVE, self.instrument.price_precision),
-                               post_only=True)
+            tick_raw, remainder = divmod(self.instrument.price_increment.raw, DBN_TO_NATIVE)
+            if remainder or tick_raw <= 0:
+                raise ValueError("instrument tick cannot be expressed in DBN units")
+            # Posts step away from the opposite side. An IOC limit sets the furthest
+            # price the agent permits the matcher to take through the displayed book.
+            sign = -1 if buy == same_side else 1
+            limit = quote + sign * offset * tick_raw
+            order = LimitOrder(**kwargs, price=Price.from_raw(limit * DBN_TO_NATIVE, self.instrument.price_precision),
+                               post_only=same_side, time_in_force=TimeInForce.GTC if same_side else TimeInForce.IOC)
         else:
             order = MarketOrder(**kwargs, time_in_force=TimeInForce.IOC)
         self.orders[order_id] = (order, key, action, event.get("trade_data") is False)
         self.active_orders[key].add(order_id)
         self.emit("paper order", **event, order_id=order_id, pricing="native L3",
                   order_side="buy" if side == OrderSide.BUY else "sell", quantity=quantity,
-                  placement=style, limit_price=quote if style == "post" else None, fill_price=None)
+                  placement=style, limit_price=limit, fill_price=None)
         self.cache.add_order(order)
         order.apply(OrderSubmitted(self.trader, self.strategy, self.instrument.id, order.client_order_id,
                                    self.account, UUID4(), self.received, self.received))
@@ -109,16 +122,27 @@ class PaperExecution:
     def __init__(self, plan, rules, emit):
         self.instrument = FuturesContract.from_dict(plan["instrument"])
         self.raw_id = plan["databento_instrument_id"]
-        self.policies = plan["rules"]
+        self.policies = {key: dict(policy) for key, policy in plan["rules"].items()}
         if not self.policies or not self.policies.keys() <= rules.keys():
             raise ValueError("execution plan contains missing or unknown strategy IDs")
         self.venues = {}
         self.followers = defaultdict(list)
         self.rules = rules
         for rule, policy in self.policies.items():
-            if (type(policy["contracts"]) is not int or policy["contracts"] <= 0
-                    or any(policy[k] not in ("post", "cross") for k in ("open", "close"))):
-                raise ValueError(f"invalid contracts or placement for {rule}")
+            if type(policy["contracts"]) is not int or policy["contracts"] <= 0:
+                raise ValueError(f"invalid contract quantity for {rule}")
+            for leg in ("open", "close"):
+                instruction = policy[leg]
+                if isinstance(instruction, str):
+                    instruction = {"style": instruction}
+                if not isinstance(instruction, dict) or instruction.keys() - {"style", "offset_ticks"}:
+                    raise ValueError(f"unknown order instruction for {rule} {leg}")
+                style = instruction.get("style")
+                offset = instruction.get("offset_ticks", 0)
+                if (style not in ("post", "cross", "cross_limit") or type(offset) is not int
+                        or offset < 0 or (style == "cross" and offset)):
+                    raise ValueError(f"invalid order instruction for {rule} {leg}")
+                policy[leg] = {"style": style, "offset_ticks": offset}
             parents = policy.get("entry_rules", [])
             if not isinstance(parents, list) or any(not isinstance(parent, str) for parent in parents):
                 raise ValueError(f"entry_rules must be a list of rule IDs for {rule}")
@@ -202,7 +226,7 @@ class PaperExecution:
         policy = self.policies[rule]
         style = policy["open" if event["action"] == "open" else "close"]
         if event.get("trade_data") is False:
-            style = "cross"
+            style = {"style": "cross", "offset_ticks": 0}
         self.venues[rule].submit(event, style, policy["contracts"], order_id)
 
     def flatten(self, last, reason, run):
@@ -216,7 +240,7 @@ class PaperExecution:
                     event = dict(rule=rule, trade_id=key, action="close", trade_data=False, reason=reason,
                                  received=last["raw"]["ts_recv"], reference=(last["source_sha256"], last["record_index"]),
                                  bid=last["best_bid"], ask=last["best_ask"])
-                    venue.submit(event, "cross", abs(held), identifier)
+                    venue.submit(event, {"style": "cross", "offset_ticks": 0}, abs(held), identifier)
                     if venue.inventory[key]:
                         venue.emit("order status", **event, remaining_contracts=venue.inventory[key],
                                    execution_event="unfilled administrative remainder")
