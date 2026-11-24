@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import sqlite3
 import subprocess
 import threading
 import time
@@ -182,6 +183,7 @@ def main():
     p.add_argument("--message-budget", type=int, required=True)
     p.add_argument("--event-budget", type=int, required=True)
     p.add_argument("--capture", type=Path)
+    p.add_argument("--capture-connection", type=int)
     plans = p.add_mutually_exclusive_group()
     plans.add_argument("--execution-plan", type=Path)
     plans.add_argument("--agent-plan")
@@ -212,7 +214,7 @@ def main():
             message_budget=args.message_budget,
             output_budget=args.event_budget,
             market_key=args.market,
-            started=started, captured=args.capture,
+            started=started, captured=args.capture, capture_connection=args.capture_connection,
             execution_plan=execution_plan, plan_source=plan_source,
         )
         pub = Publication(s, url, push_url)
@@ -228,16 +230,28 @@ def main():
         indices = () if s.captured else ((f, i) for f in s.feed.week for i in range(len(f.records)))
 
         def guard():
-            while not finished.wait(0.1):
-                reason = s.due()
-                if reason:
-                    s.stop(reason)
-                    try:
-                        notify(reason, s.run)
-                        alert_sent.set()
-                    except requests.RequestException:
-                        pass
+            while not finished.wait(0.25):
+                if s.state != "active":
                     return
+                end = None
+                if s.captured and args.capture_connection is not None:
+                    try:
+                        end = s.feed.terminal_state()
+                    except (OSError, sqlite3.Error, RuntimeError):
+                        end = dict(connection_id=args.capture_connection, status="capture journal unreadable")
+                if end is not None:
+                    stopped_here = s.stop_capture(end)
+                elif reason := s.due():
+                    stopped_here = s.stop(reason)
+                else:
+                    continue
+                if stopped_here:
+                    try:
+                        notify(s.state, s.run)
+                        alert_sent.set()
+                    except (requests.RequestException, RuntimeError):
+                        pass
+                return
 
         watcher = threading.Thread(target=guard, daemon=True)
         watcher.start()
@@ -284,6 +298,13 @@ def main():
             why = s.state
     except PreflightDeadline as error:
         why = str(error)
+        raise
+    except Exception as error:
+        if args.capture:
+            from .capture import CaptureEnded
+            if isinstance(error, CaptureEnded):
+                evidence = error.evidence
+                why = f"{error} (connection {evidence['connection_id']}, last MBO {evidence['last_mbo_position']})"
         raise
     finally:
         # Attempt the phone, local receipt, relay and final push independently on failure.
