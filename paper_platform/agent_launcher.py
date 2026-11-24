@@ -27,11 +27,13 @@ BUDGET_STOP = "budget reached"
 USAGE = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
 
 
-class BudgetStop(Exception):
+# The two stops are BaseException: the timer and the stop signal raise them inside the SDK's
+# request, and the SDK reports any Exception raised there as a connection failure.
+class BudgetStop(BaseException):
     """The run met an authorized limit."""
 
 
-class RunStop(Exception):
+class RunStop(BaseException):
     """The runner was told to stop."""
 
 
