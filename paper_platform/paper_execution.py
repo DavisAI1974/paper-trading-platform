@@ -38,6 +38,7 @@ class RuleVenue:
         self.bus.register("ExecEngine.process", self.on_event)
         self.emit = emit
         self.orders = {}
+        self.active_orders = defaultdict(set)
         self.inventory = defaultdict(int)
         self.reference = None
         self.received = None
@@ -46,6 +47,10 @@ class RuleVenue:
         order, key, action, administrative = self.orders[str(event.client_order_id)]
         order.apply(event)
         self.cache.update_order(order)
+        if order.is_closed:
+            self.active_orders[key].discard(str(order.client_order_id))
+            if not self.active_orders[key]:
+                del self.active_orders[key]
         data = dict(rule=self.rule, trade_id=key, order_id=str(event.client_order_id),
                     action=action, received=self.received, reference=self.reference,
                     trade_data=not administrative, execution_event=type(event).__name__)
@@ -64,9 +69,8 @@ class RuleVenue:
         self.reference, self.received = event["reference"], event["received"]
         self.clock.set_time(self.received)
         if action != "open":
-            for order, parent, _, _ in tuple(self.orders.values()):
-                if parent == key and order.is_open:
-                    self.engine.cancel_order(order)
+            for identifier in tuple(self.active_orders.get(key, ())):
+                self.engine.cancel_order(self.orders[identifier][0])
             held = self.inventory[key]
             quantity = abs(held)
             if not quantity:
@@ -88,6 +92,10 @@ class RuleVenue:
         else:
             order = MarketOrder(**kwargs, time_in_force=TimeInForce.IOC)
         self.orders[order_id] = (order, key, action, event.get("trade_data") is False)
+        self.active_orders[key].add(order_id)
+        self.emit("paper order", **event, order_id=order_id, pricing="native L3",
+                  order_side="buy" if side == OrderSide.BUY else "sell", quantity=quantity,
+                  placement=style, limit_price=quote if style == "post" else None, fill_price=None)
         self.cache.add_order(order)
         order.apply(OrderSubmitted(self.trader, self.strategy, self.instrument.id, order.client_order_id,
                                    self.account, UUID4(), self.received, self.received))
@@ -103,10 +111,24 @@ class PaperExecution:
         if not self.policies or not self.policies.keys() <= rules.keys():
             raise ValueError("execution plan contains missing or unknown strategy IDs")
         self.venues = {}
+        self.followers = defaultdict(list)
+        self.rules = rules
         for rule, policy in self.policies.items():
             if (type(policy["contracts"]) is not int or policy["contracts"] <= 0
                     or any(policy[k] not in ("post", "cross") for k in ("open", "close"))):
                 raise ValueError(f"invalid contracts or placement for {rule}")
+            parents = policy.get("entry_rules", [])
+            if not isinstance(parents, list) or any(not isinstance(parent, str) for parent in parents):
+                raise ValueError(f"entry_rules must be a list of rule IDs for {rule}")
+            if len(set(parents)) != len(parents):
+                raise ValueError(f"duplicate entry rule for {rule}")
+            if parents and (rules[rule]["role"] != "manager" or
+                            policy.get("on_parent_close") not in ("exit", "hold")):
+                raise ValueError(f"{rule} needs a manager rule and an explicit on_parent_close instruction")
+            for parent in parents:
+                if parent not in rules or rules[parent]["role"] == "manager":
+                    raise ValueError(f"{rule} needs a catalogue entry rule, got {parent}")
+                self.followers[parent].append(rule)
             self.venues[rule] = RuleVenue(rule, self.instrument, self.raw_id, emit)
 
     def market(self, msg):
@@ -151,15 +173,35 @@ class PaperExecution:
             if trade is not None:
                 venue.engine.process_trade_tick(trade)
 
+    def instructions(self, signal):
+        """Route the originating signal and any independently configured manager orders."""
+        parent = signal["rule"]
+        if parent in self.venues:
+            if signal["action"] == "exit":
+                # The research signal remains an exit indication. The actual order
+                # closes only contracts this manager filled in its own venue.
+                yield dict(signal, action="close", signal_action="exit")
+            else:
+                yield signal
+        for manager in self.followers.get(parent, ()):
+            if signal["side"] != self.rules[manager]["direction"]:
+                continue
+            action = signal["action"]
+            if action == "close" and self.policies[manager]["on_parent_close"] == "hold":
+                continue
+            if action not in ("open", "close"):
+                continue
+            yield dict(signal, rule=manager, entry_rule=parent, source_trade_id=signal["trade_id"],
+                       trade_id=f"{signal['trade_id']}/{manager}", management_only=True,
+                       reason=f"{parent}: {signal['reason']}")
+
     def submit(self, event, order_id):
         rule = event["rule"]
-        if rule not in self.venues:
-            return
-        action = event["action"]
-        style = self.policies[rule]["open" if action == "open" else "close"]
+        policy = self.policies[rule]
+        style = policy["open" if event["action"] == "open" else "close"]
         if event.get("trade_data") is False:
             style = "cross"
-        self.venues[rule].submit(event, style, self.policies[rule]["contracts"], order_id)
+        self.venues[rule].submit(event, style, policy["contracts"], order_id)
 
     def flatten(self, last, reason, run):
         for rule, venue in self.venues.items():
@@ -172,7 +214,6 @@ class PaperExecution:
                     event = dict(rule=rule, trade_id=key, action="close", trade_data=False, reason=reason,
                                  received=last["raw"]["ts_recv"], reference=(last["source_sha256"], last["record_index"]),
                                  bid=last["best_bid"], ask=last["best_ask"])
-                    venue.emit("paper order", **event, order_id=identifier, pricing="native L3")
                     venue.submit(event, "cross", abs(held), identifier)
                     if venue.inventory[key]:
                         venue.emit("order status", **event, remaining_contracts=venue.inventory[key],
