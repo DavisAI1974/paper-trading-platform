@@ -163,6 +163,23 @@ class CapturedFeed:
             db.execute("BEGIN")
             return self._connection_end(db)
 
+    def receive_time_coverage(self, cursor):
+        """Describe when the stored first-copy timestamps were observed, through this run's cursor."""
+        with closing(sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+            source = json.loads(db.execute("SELECT identity FROM source WHERE id=1").fetchone()[0])["source"]
+            rows = db.execute("""
+                SELECT f.connection_id,
+                       CASE WHEN ? = 'purchased' THEN 'purchased archive delivery'
+                            WHEN s.position IS NOT NULL AND f.position >= s.position THEN 'live delivery'
+                            ELSE 'gateway replay delivery' END,
+                       MIN(f.position), MAX(f.position), COUNT(*)
+                FROM frames f LEFT JOIN live_starts s ON f.connection_id=s.connection_id
+                WHERE f.position BETWEEN 0 AND ?
+                GROUP BY 1,2 ORDER BY MIN(f.position)
+            """, (source, cursor))
+            return [dict(connection_id=connection, observed_during=phase, first_position=first,
+                         last_position=last, frames=count) for connection, phase, first, last, count in rows]
+
     def recorded_run(self, receipt):
         """Admit exactly the MBO prefix the original live runner consumed."""
         delivered = receipt["delivered"]

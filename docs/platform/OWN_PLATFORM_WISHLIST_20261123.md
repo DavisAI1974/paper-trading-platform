@@ -46,6 +46,8 @@
 
 - [ ] **7.** Everything the feed sends is recorded whole, as it arrives, with our receive time in nanoseconds. Raw, nothing dropped. DECIDED
 
+  **Recovery built in draft.** Each encrypted checkpoint identifies its last durable raw delivery, receive time, connection and MBO position. Restore publishes the complete SQLite file atomically and accepts earlier checkpoints. Run receipts distinguish first-copy timestamps observed during gateway replay from live delivery. A host destroyed between remote checkpoints can still lose original receive timestamps. Eliminating that interval requires recorder storage that survives host loss; Git snapshots alone cannot recover it.
+
   **In progress.** PR 5 records DBN deliveries and host receive times and adds recovery checkpoints. A replacement runner can restore encrypted checkpoints from markets-data. The recorder persists the connection ID, last durable frame position and termination reason. The final publisher also retries a locally committed checkpoint after a failed push, even when the capture has not changed. If the capture host is lost after a local write and before its checkpoint reaches markets-data, exact receive timestamps for that interval can be lost. Lossless recovery remains open. [Recorder](../../paper_platform/record_mbo.py) · [Checkpoint publisher](../../paper_platform/capture_backup.py)
 
 - [x] **8.** Real data only. No made-up numbers, not even to test code. DECIDED

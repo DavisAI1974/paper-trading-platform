@@ -3,6 +3,7 @@
 import hashlib
 from importlib.metadata import version
 import json
+import sqlite3
 import struct
 import subprocess
 import threading
@@ -104,7 +105,6 @@ class Session:
             else:
                 self.stream = self.feed.messages(follow=not replay_capture, poll=not replay_capture,
                                                  through_trade_day=replay_capture)
-            import sqlite3
             from contextlib import closing
             with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as db:
                 self.warm_through = -1 if replay_capture else db.execute("SELECT COALESCE(MAX(position),-1) FROM frames").fetchone()[0]
@@ -390,6 +390,10 @@ class Session:
                 if self.captured:
                     receipt["timers_after_last_input_ns"] = self.timers_after_input
                     receipt["capture_frame_hashes_sha256"] = self.capture_frame_hash.hexdigest()
+                    try:
+                        receipt["capture_receive_time_coverage"] = self.feed.receive_time_coverage(self.cursor)
+                    except (OSError, sqlite3.Error) as error:
+                        receipt["capture_receive_time_coverage_error"] = type(error).__name__
                 (self.folder / "receipt.json").write_text(json.dumps(receipt, indent=2), encoding="utf8")
 
             return True

@@ -49,16 +49,21 @@ class Checkpoints:
             if existing:
                 raise ValueError("missing recorded capture checkpoint")
             return
-        blocks = json.loads(self.cipher.decrypt(manifest.read_bytes()))
+        checkpoint = json.loads(self.cipher.decrypt(manifest.read_bytes()))
+        blocks = checkpoint if isinstance(checkpoint, list) else checkpoint["blocks"]
         self.database.parent.mkdir(parents=True, exist_ok=True)
-        with self.database.open("xb") as output:
-            for digest in blocks:
-                if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
-                    raise ValueError("invalid checkpoint block name")
-                data = gzip.decompress(self.cipher.decrypt((self.folder / digest).read_bytes()))
-                if hashlib.sha256(data).hexdigest() != digest:
-                    raise ValueError("invalid checkpoint block")
-                output.write(data)
+        with tempfile.TemporaryDirectory(dir=self.database.parent) as tmp:
+            restored = Path(tmp) / "restored.sqlite"
+            with restored.open("xb") as output:
+                for digest in blocks:
+                    if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+                        raise ValueError("invalid checkpoint block name")
+                    data = gzip.decompress(self.cipher.decrypt((self.folder / digest).read_bytes()))
+                    if hashlib.sha256(data).hexdigest() != digest:
+                        raise ValueError("invalid checkpoint block")
+                    output.write(data)
+            # Publish only the complete database. Never replace a live recorder.
+            os.link(restored, self.database)
 
     def publish(self):
         remote = git(self.root, "remote", "get-url", "--push", "--all", "origin").lower().removesuffix(".git")
@@ -71,6 +76,10 @@ class Checkpoints:
             with closing(sqlite3.connect(self.database.as_uri() + "?mode=ro", uri=True)) as source:
                 with closing(sqlite3.connect(snapshot)) as target:
                     source.backup(target)
+                    if not target.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='frames'").fetchone():
+                        return
+                    last = target.execute("SELECT id,connection_id,received_ns,kind FROM frames ORDER BY id DESC LIMIT 1").fetchone()
+                    last_mbo, = target.execute("SELECT MAX(position) FROM frames").fetchone()
             blocks = []
             with snapshot.open("rb") as data:
                 while block := data.read(BLOCK):
@@ -80,8 +89,10 @@ class Checkpoints:
                     if not destination.exists():
                         destination.write_bytes(self.cipher.encrypt(gzip.compress(block, compresslevel=1)))
         manifest = self.folder / "checkpoint.enc"
-        if not manifest.exists() or json.loads(self.cipher.decrypt(manifest.read_bytes())) != blocks:
-            manifest.write_bytes(self.cipher.encrypt(json.dumps(blocks).encode()))
+        checkpoint = dict(version=2, blocks=blocks, last_mbo_position=last_mbo,
+                          last_delivery=dict(zip(("id", "connection_id", "received_ns", "kind"), last)) if last else None)
+        if not manifest.exists() or json.loads(self.cipher.decrypt(manifest.read_bytes())) != checkpoint:
+            manifest.write_bytes(self.cipher.encrypt(json.dumps(checkpoint).encode()))
         # Stage even an unchanged manifest. A prior attempt may have stopped
         # between writing the encrypted files, staging them and committing.
         git(self.root, "add", "--", self.folder.relative_to(self.root).as_posix())
