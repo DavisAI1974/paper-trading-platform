@@ -23,6 +23,8 @@ Start with **17**. Work in the order below, one number at a time. If the current
 
 ## Codex's current item
 
+**20 · The 5.75-hour stop.** The draft shares one Actions clock across startup, capture and paper execution. Terminal records carry the remaining orders, contracts and any shutdown errors. The implementation awaits authorized operational evidence.
+
 **16 · Individual trades.** The full run and each strategy filter now use the same individual trade rows. Each row retains its own orders and partial fills. The change is built in draft and awaits review and merge.
 
 **12 · Stored replay.** The replay workflow defaults to the pinned purchased NG archive. It can restore a purchased or live MBO checkpoint from markets-data. A compatible original live-run receipt supplies its agent plan, first decision-eligible cursor, last processed frame and stop reason. The replay starts fresh inventory and writes its own journal. Receipt replay uses the original platform commit. The manual comparison of two completed journals is implemented. Live/replay parity still needs operational evidence.

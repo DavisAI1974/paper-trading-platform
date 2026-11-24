@@ -18,6 +18,7 @@ import requests
 from .api import wire
 from .causal_gate import PreflightDeadline
 from .session import Session, git
+from .run_clock import CLOCK_STOP, LIMIT_SECONDS, run_start_ns
 from root.calendar import trade_day_bounds
 
 
@@ -147,6 +148,8 @@ class Publication:
         else:
             status["capture_end"] = event.get("capture_end")
             status["last_source"] = event.get("last_source")
+            if "shutdown" in event:
+                status["shutdown"] = event["shutdown"]
             if "remaining_paper_inventory" in event:
                 status["paper_inventory"] = event["remaining_paper_inventory"]
         return {"event": wire(event), "status": wire(status)}
@@ -196,7 +199,7 @@ def read_execution_plan(args):
 
 
 def main():
-    started = time.monotonic()
+    started = run_start_ns() / 1_000_000_000
     p = argparse.ArgumentParser()
     p.add_argument("--data", type=Path, required=True)
     p.add_argument("--trade-day", type=date.fromisoformat, required=True)
@@ -235,6 +238,8 @@ def main():
     alert_sent = threading.Event()
     why = "failure"
     try:
+        if time.monotonic() >= started + LIMIT_SECONDS:
+            raise PreflightDeadline("5.75-hour limit reached before paper startup")
         requests.get(url + "/health", timeout=90).raise_for_status()
         receipt = None
         if args.replay_receipt:
@@ -300,8 +305,8 @@ def main():
         watcher = threading.Thread(target=guard, daemon=True)
         watcher.start()
 
-        def deliver_relay():
-            while pending:
+        def deliver_relay(*, final=False):
+            while pending and (final or s.state == "active"):
                 pub.send(pending[0])
                 pending.popleft()
 
@@ -363,6 +368,9 @@ def main():
         if s is not None:
             try:
                 s.stop(why)
+                shutdown = s.shutdown_evidence
+                if shutdown.get("errors") or (s.state == CLOCK_STOP and shutdown.get("native_flat") is False):
+                    errors.append("administrative liquidation")
             except Exception:
                 errors.append("close")
         if "notice_worker" in locals():
@@ -378,15 +386,15 @@ def main():
             except Exception:
                 errors.append("git")
             try:
-                deliver_relay()
+                deliver_relay(final=True)
             except Exception:
                 errors.append("relay")
         if errors:
             try:
-                notify("failure during final delivery", s.run if s else "preflight")
+                notify("failure during shutdown: " + ", ".join(errors), s.run if s else "preflight")
             except Exception:
                 pass
-            raise RuntimeError("final delivery failed: " + ", ".join(errors))
+            raise RuntimeError("shutdown failed: " + ", ".join(errors))
 
 
 if __name__ == "__main__":

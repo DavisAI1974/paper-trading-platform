@@ -39,6 +39,8 @@ jobs:
       DELIVERY_BUDGET: ${{ inputs.message_budget }}
       PAPER_CAPTURE_KEY: ${{ secrets.PAPER_CAPTURE_KEY }}
     steps:
+      - name: Start the 5.75-hour run clock
+        run: python3 -c 'import time; print(f"PAPER_RUN_STARTED_NS={time.monotonic_ns()}")' >> "$GITHUB_ENV"
       - name: Read the selected platform commit
         shell: bash
         run: |

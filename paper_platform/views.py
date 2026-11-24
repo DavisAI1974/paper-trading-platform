@@ -131,6 +131,18 @@ def stop_details(state, rule=""):
                          ("Last recorder receive time (ns)", end.get("last_received_ns"))):
         if value is not None:
             fields.append(f"<small>{label} · {e(value)}</small>")
+    shutdown = state.get("shutdown") or {}
+    for owner, trades in shutdown.get("remaining_working_orders", {}).items():
+        if rule and rule != owner:
+            continue
+        for trade_id, tags in trades.items():
+            for tag in tags:
+                fields.append(f"<p>{e(owner)} · Working order {e(tag)}</p><small>Trade · {e(trade_id)}</small>")
+    for issue in shutdown.get("errors", ()):
+        if not rule or issue.get("rule") in (None, rule):
+            fields.append(f"<p>Shutdown error · {e(issue['stage'])} · {e(issue['error'])}</p>")
+            if issue.get("order_id"):
+                fields.append(f"<small>{e(issue['rule'])} · Order {e(issue['order_id'])}</small>")
     for owner, positions in (state.get("paper_inventory") or {}).items():
         if rule and rule != owner:
             continue

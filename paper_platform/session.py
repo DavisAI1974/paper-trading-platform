@@ -12,13 +12,12 @@ from uuid import uuid4
 
 from crypto_ng.tick import NS
 
-from .causal_gate import check_prefix
+from .causal_gate import PreflightDeadline, check_prefix
 from .engine import Engine
 from .feed import HistoricalFeed
 from .rulebook import RULES, catalogue
 from .market import replay_market
-
-LIMIT_SECONDS = 5.75 * 3600
+from .run_clock import CLOCK_STOP, LIMIT_SECONDS, run_start_ns
 
 
 def git(root, *args):
@@ -36,7 +35,10 @@ class Session:
         started=None, execution_plan=None, captured=None, plan_source=None, capture_connection=None,
         replay_capture=False, capture_commit=None, replay_receipt=None,
     ):
-        self.started = time.monotonic() if started is None else started
+        self.started = run_start_ns() / 1_000_000_000 if started is None else started
+        self.deadline = self.started + LIMIT_SECONDS
+        if time.monotonic() >= self.deadline:
+            raise PreflightDeadline("5.75-hour limit reached before paper startup")
         self.trade_day = trade_day.isoformat()
         self.market = replay_market(market_key)
         self.data_root = Path(data_root).resolve()
@@ -78,6 +80,7 @@ class Session:
         folder = self.data_root / self.market["archive"]
         self.capture_end = None
         self.liquidation_available = True
+        self.shutdown_evidence = {}
         self.first_live_decision_cursor = None
         self.timers_after_input = []
         self.captured = captured is not None
@@ -94,7 +97,7 @@ class Session:
                         or "first_live_decision_cursor" not in replay_receipt):
                     raise ValueError("receipt lacks a matching live capture and recorded eligibility window")
             self.feed = CapturedFeed(path, trade_day, capture_connection)
-            causal_check = capture_preflight(self.feed, self.rules, self.started + LIMIT_SECONDS, follow=not replay_capture)
+            causal_check = capture_preflight(self.feed, self.rules, self.deadline, follow=not replay_capture)
             if replay_receipt is not None:
                 self.stream = self.feed.recorded_run(replay_receipt)
             else:
@@ -111,7 +114,7 @@ class Session:
                             reference="frame SHA-256 and tape position")]
         else:
             self.feed = HistoricalFeed(folder, trade_day, market_key)
-            causal_check = check_prefix(self.feed, self.rules, self.started + LIMIT_SECONDS)
+            causal_check = check_prefix(self.feed, self.rules, self.deadline)
             self.stream = self.feed.messages()
             sources = self.feed.sources
         self.folder = self.data_root / "paper-trading" / self.run
@@ -175,14 +178,14 @@ class Session:
             return
         for instruction in self.execution.instructions(dict(e, signal_sequence=sequence)):
             if self.state == "active" and (self.events >= self.output_budget
-                                           or time.monotonic() - self.started >= LIMIT_SECONDS):
+                                           or time.monotonic() >= self.deadline):
                 break
             tag = order_id if instruction["rule"] == e["rule"] else f"{order_id}-{instruction['rule']}"
             self.execution.submit(instruction, tag)
 
     def due(self):
-        if time.monotonic() - self.started >= LIMIT_SECONDS:
-            return "flattened at the 5.75-hour stop"
+        if time.monotonic() >= self.deadline:
+            return CLOCK_STOP
         if self.cursor + 1 >= self.message_budget or self.events >= self.output_budget:
             return "budget reached"
         return None
@@ -191,9 +194,9 @@ class Session:
         before = self.engine.begin_decision_batch()
         decisions = decide(value)
         needed = sum(1 + (e["action"] in ("open", "close", "exit")) for e in decisions)
-        if time.monotonic() - self.started >= LIMIT_SECONDS:
+        if time.monotonic() >= self.deadline:
             self.engine.rollback_decision_batch(before)
-            self.stop("flattened at the 5.75-hour stop")
+            self.stop(CLOCK_STOP)
             return False
         if self.events + needed > self.output_budget:
             self.engine.rollback_decision_batch(before)
@@ -239,6 +242,13 @@ class Session:
                 return None
             try:
                 message = next(self.stream, None)
+                # A recorder failure still governs whether liquidation is executable.
+                if message is not None and "capture_end" in message:
+                    self.stop_capture(message["capture_end"])
+                    return None
+                if time.monotonic() >= self.deadline:
+                    self.stop(CLOCK_STOP)
+                    return None
                 if message is None:
                     self.stop("end of capture" if self.captured else "end of purchased input")
                     return None
@@ -254,9 +264,6 @@ class Session:
                     else:
                         self.stop(message["recorded_stop"])
                     return None
-                if "capture_end" in message:
-                    self.stop_capture(message["capture_end"])
-                    return None
                 if message.get("idle"):
                     return None
                 if message["period"] != "vendor snapshot":
@@ -265,6 +272,9 @@ class Session:
                         self.advance_clock(expiry)
                         if self.state != "active":
                             return None
+                if time.monotonic() >= self.deadline:
+                    self.stop(CLOCK_STOP)
+                    return None
                 self.timers_after_input.clear()
                 self.cursor = message["cursor"]
                 self.last = message
@@ -301,17 +311,18 @@ class Session:
             self.liquidation_available = evidence["status"] in (
                 "closed", "end of purchased input", "message budget reached", "clock limit", "capture stopped"
             )
-            reason = ("flattened at the 5.75-hour stop" if evidence["status"] == "clock limit"
+            reason = (CLOCK_STOP if evidence["status"] == "clock limit"
                       else "capture: " + evidence["status"])
             return self.stop(reason)
 
     def stop_notice(self):
+        reason = "5.75-hour stop reached" if self.state == CLOCK_STOP else self.state
         if not self.capture_end:
-            return self.state
+            return reason
         last = self.capture_end.get("last_mbo_position")
         recorded = "unknown" if last is None else str(last)
         processed = "none" if self.cursor < 0 else str(self.cursor)
-        return f"{self.state}. Last recorded MBO {recorded}. Last processed {processed}."
+        return f"{reason}. Last recorded MBO {recorded}. Last processed {processed}."
 
     def last_source(self):
         if self.last is None:
@@ -320,34 +331,52 @@ class Session:
                     tape_received_ns=self.last["raw"]["ts_recv"],
                     host_received_ns=self.last.get("received_by_capture_ns", self.last.get("received_by_replay_ns")))
 
+    def _record_stop_signals(self, reason, close_signals):
+        for decision in self.engine.stop(reason):
+            if self.execution is None:
+                self.record(decision)
+                continue
+            signal = self.write("signal", **decision)
+            if decision["action"] == "close":
+                for instruction in self.execution.instructions(dict(decision, signal_sequence=signal["sequence"])):
+                    close_signals[instruction["rule"], instruction["trade_id"]] = instruction
+
     def stop(self, reason):
         with self.lock:
             if self.state != "active":
                 return
+            self.shutdown_evidence = {"elapsed_ns_at_stop": time.monotonic_ns() - round(self.started * 1_000_000_000)}
             self.state = reason
             self.stopping.set()
             try:
+                errors = []
                 close_signals = {}
-                for decision in self.engine.stop(reason):
-                    if self.execution is None:
-                        self.record(decision)
-                        continue
-                    signal = self.write("signal", **decision)
-                    if decision["action"] == "close":
-                        for instruction in self.execution.instructions(dict(decision, signal_sequence=signal["sequence"])):
-                            close_signals[instruction["rule"], instruction["trade_id"]] = instruction
+                try:
+                    self._record_stop_signals(reason, close_signals)
+                except Exception as error:
+                    errors.append(dict(stage="close signals", error=type(error).__name__))
                 if self.execution and self.last:
-                    self.execution.flatten(self.last, reason, self.run, executable=self.liquidation_available,
-                                           close_signals=close_signals)
+                    errors.extend(self.execution.flatten(self.last, reason, self.run,
+                                                         executable=self.liquidation_available,
+                                                         close_signals=close_signals))
+                working = self.execution.working_orders() if self.execution else {}
+                inventory = self._paper_inventory()
+                native_flat = None
+                if self.execution:
+                    if working or inventory:
+                        native_flat = False
+                    elif not any(issue["stage"] == "liquidation" for issue in errors):
+                        native_flat = True
+                self.shutdown_evidence.update(remaining_working_orders=working, errors=errors, native_flat=native_flat)
                 self.write("status", reason=reason, trade_data=False, last_source=self.last_source(),
-                           capture_end=self.capture_end, remaining_paper_inventory=self._paper_inventory())
+                           capture_end=self.capture_end, remaining_paper_inventory=inventory, shutdown=self.shutdown_evidence)
             finally:
                 self.receives.close()
                 self.journal.close()
                 files = {p.name: digest(p) for p in self.folder.iterdir() if p.is_file()}
                 receipt = dict(
                     **self.initial, status=reason, delivered=self.cursor + 1, events=self.events, files=files,
-                    first_live_decision_cursor=self.first_live_decision_cursor,
+                    first_live_decision_cursor=self.first_live_decision_cursor, shutdown=self.shutdown_evidence,
                     remaining_paper_inventory=self._paper_inventory(), last_source=self.last_source(),
                     capture_end=self.capture_end,
                 )

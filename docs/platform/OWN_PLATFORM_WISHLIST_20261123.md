@@ -92,7 +92,7 @@
 
 - [ ] **20.** A run STOPS ITSELF AT 5.75 HOURS, flattens every position, and marks each closing order "flattened at the 5.75-hour stop": not trade data. DECIDED
 
-  **In progress.** Main stops and records administrative closes for quote-only positions. PR 5 adds cancellation and liquidation of filled inventory and records any unfilled remainder. On feed loss, the draft cancels resting orders and records the actual contracts still held for each trade. A stop now records the strategy close signals, then cancels and liquidates once per venue and trade. Any partial liquidation carries the remaining inventory. Operational evidence is pending.
+  **Built in draft, awaiting stop evidence.** The authorized Actions job starts one 5.75-hour clock shared by the recorder, preflight and paper runner. The runner rechecks it after a feed read and before matching. On the clock stop it cancels resting orders, submits one administrative close per trade with filled inventory, and marks the order and resulting fills as excluded from trade data. A failed close leaves the other trades eligible for shutdown. The terminal journal and receipt record elapsed time, outstanding order tags, actual remaining contracts and errors. A failed or incomplete clock-stop liquidation is reported as a shutdown failure. An authorized run is still needed to demonstrate this behavior.
 
 - [x] **21.** Each run starts over new. Nothing carries over. DECIDED
 

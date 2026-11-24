@@ -62,7 +62,7 @@ class RuleVenue:
         self.received = None
 
     def on_event(self, event):
-        order, key, action, administrative = self.orders[str(event.client_order_id)]
+        order, key, action, administrative_reason = self.orders[str(event.client_order_id)]
         order.apply(event)
         self.cache.update_order(order)
         if order.is_closed:
@@ -71,8 +71,10 @@ class RuleVenue:
                 del self.active_orders[key]
         data = dict(rule=self.rule, trade_id=key, order_id=str(event.client_order_id),
                     action=action, received=self.received, reference=self.reference,
-                    trade_data=not administrative, execution_event=type(event).__name__,
+                    trade_data=administrative_reason is None, execution_event=type(event).__name__,
                     order_status=order_status_to_str(order.status), remaining_quantity=int(order.leaves_qty))
+        if administrative_reason is not None:
+            data["administrative_reason"] = administrative_reason
         if isinstance(event, OrderFilled):
             qty = int(event.last_qty)
             self.inventory[key] += qty if event.order_side == OrderSide.BUY else -qty
@@ -93,8 +95,18 @@ class RuleVenue:
         self.reference, self.received = event["reference"], event["received"]
         self.clock.set_time(self.received)
         if action != "open":
-            for identifier in tuple(self.active_orders.get(key, ())):
-                self.engine.cancel_order(self.orders[identifier][0])
+            cancellation_error = None
+            for identifier in sorted(self.active_orders.get(key, ())):
+                try:
+                    self.engine.cancel_order(self.orders[identifier][0])
+                except Exception as error:
+                    if not event.get("administrative_flatten"):
+                        raise
+                    cancellation_error = error
+            if cancellation_error is not None:
+                raise cancellation_error
+            if event.get("administrative_flatten") and self.active_orders.get(key):
+                raise RuntimeError("working paper order still awaiting cancellation")
             held = self.inventory[key]
             quantity = abs(held)
             if quantity and not executable:
@@ -130,7 +142,8 @@ class RuleVenue:
                                post_only=same_side, time_in_force=TimeInForce.GTC if same_side else TimeInForce.IOC)
         else:
             order = MarketOrder(**kwargs, time_in_force=TimeInForce.IOC)
-        self.orders[order_id] = (order, key, action, event.get("trade_data") is False)
+        administrative_reason = event["reason"] if event.get("trade_data") is False else None
+        self.orders[order_id] = (order, key, action, administrative_reason)
         self.active_orders[key].add(order_id)
         self.emit("paper order", **event, order_id=order_id, pricing="native L3",
                   order_side="buy" if side == OrderSide.BUY else "sell", quantity=quantity,
@@ -257,7 +270,12 @@ class PaperExecution:
             style = {"style": "cross", "offset_ticks": 0}
         self.venues[rule].submit(event, style, policy["contracts"], order_id)
 
+    def working_orders(self):
+        return {rule: {key: sorted(tags) for key, tags in venue.active_orders.items() if tags}
+                for rule, venue in self.venues.items() if venue.active_orders}
+
     def flatten(self, last, reason, run, *, executable=True, close_signals=None):
+        errors = []
         for rule, venue in self.venues.items():
             keys = dict.fromkeys(venue.active_orders)
             keys.update((key, None) for key, held in venue.inventory.items() if held)
@@ -268,4 +286,11 @@ class PaperExecution:
                              administrative_flatten=True, reason=reason, received=last["raw"]["ts_recv"],
                              reference=(last["source_sha256"], last["record_index"]),
                              bid=last["best_bid"], ask=last["best_ask"])
-                venue.submit(event, {"style": "cross", "offset_ticks": 0}, 0, identifier, executable=executable)
+                try:
+                    venue.submit(event, {"style": "cross", "offset_ticks": 0}, 0, identifier, executable=executable)
+                except Exception as error:
+                    # The tag has been consumed. Continue with independent trades and
+                    # retain the exact outstanding orders and inventory in the receipt.
+                    errors.append(dict(stage="liquidation", rule=rule, trade_id=key, order_id=identifier,
+                                       error=type(error).__name__))
+        return errors
