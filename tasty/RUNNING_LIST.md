@@ -120,7 +120,7 @@ line here is a result.
     is not finished, and 2207911 was already standing before the run began, so every buy of the run was refused
     from the first. They are Day orders. Ways out: try the buy again after the trade day ends (5 pm Eastern
     Tuesday), or reset the sandbox account on tastytrade's tool page (Greg).
-    Record: DATA `paper-trading-20261123/live-runs/closeout-20261124T011337Z/`.
+    Record: DATA `paper-trading-20261123/live-runs/closeout-20261124T011335Z/`.
 15. 2026-11-24, Claude, same run. NO TRADE WAS EVER CLOSED BY AN ORDER. Every close was either a buy (refused) or the
     sell that closes a buy which had never opened. 28 closes were held back for that second reason.
 16. 2026-11-24, Claude, same run. ORDERS GO OUT LATE. From the signal to the order going out: 1 to 61 seconds over
@@ -142,6 +142,16 @@ line here is a result.
     nothing about the quote the rule saw. Each fill is on its own line in DATA
     `paper-trading-20261123/live-runs/feed-only-20261124T011440Z/fills-beside-the-market.json`.
 
+20. 2026-11-24, Claude. THE START CHECK LET THE RUN BEGIN WITH ORDER 2207911 STANDING. Handoff V had it down as
+    unverified ("Cancel Requested", its final status never read). Before the run Claude changed the start check to
+    count only an order that is not terminal AND not fully filled, because the sandbox's live list also holds
+    filled orders; 2207911 had its fill, so it passed. If C14's cause is right, that order is what made the
+    sandbox refuse every buy. The check should refuse on ANY unfinished order on the symbol, filled or not.
+21. 2026-11-24, Claude. THE RUN'S RECEIPT DOES NOT SHOW WHAT WAS LEFT IN THE ACCOUNT. `receipt.json` of the first run
+    has no final positions or live orders in it, and its `account_positions_left_not_flattened` reads empty (that
+    field lists other symbols only) while the account was short 13. The final pull is in `orders.jsonl` only.
+    Someone reading the receipt alone would think the run ended flat.
+
 ## D. Runs
 
 1. 2026-11-23 evening (trade day Tue Nov 24, 2026), 8:05 pm to 8:12 pm Eastern. THE FIRST RUN WITH ORDERS, on Greg's
@@ -156,7 +166,7 @@ line here is a result.
    - The account was left SHORT 13 LOTS. The close-out by hand did not get through either (C14).
    - What it showed: C8 to C11 and C14 to C18.
    Records: DATA `paper-trading-20261123/live-runs/orders-20261124T010517Z/` (the run) and
-   `closeout-20261124T011337Z/` (the close-out and two dry-run probes).
+   `closeout-20261124T011335Z/` (the close-out and two dry-run probes).
 
 2. 2026-11-23 evening (trade day Tue Nov 24, 2026), 8:14 pm to 8:31 pm Eastern. A FEED-ONLY RECORDING, no orders
    (the runner without `--orders`), to catch the feed as it reached the moments the first run's orders filled.
