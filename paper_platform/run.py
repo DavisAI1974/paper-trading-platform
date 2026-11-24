@@ -170,10 +170,7 @@ def pace_to_record(session, received, base, stopped, publication=None, deliver=N
             return
 
 
-def read_execution_plan(args):
-    if args.execution_plan:
-        return json.loads(args.execution_plan.read_text(encoding="utf-8")), args.execution_plan.name
-    selector = args.agent_plan
+def read_agent_plan(selector):
     if selector is None:
         return None, None
     if selector.lstrip().startswith("{"):
@@ -185,6 +182,12 @@ def read_execution_plan(args):
     if path.parent != root:
         raise ValueError("named plans belong in paper_platform/execution_plans")
     return json.loads(path.read_text(encoding="utf-8")), f"paper_platform/execution_plans/{selector}"
+
+
+def read_execution_plan(args):
+    if args.execution_plan:
+        return json.loads(args.execution_plan.read_text(encoding="utf-8")), args.execution_plan.name
+    return read_agent_plan(args.agent_plan)
 
 
 def main():

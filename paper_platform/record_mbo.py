@@ -126,19 +126,31 @@ def purchased(data_root, trade_day, profile, sink):
                     count += 1
 
 
-def live(trade_day, profile, sink):
+def live(trade_day, profile, sink, contract_file=None):
     if not os.environ.get("DATABENTO_API_KEY", "").strip():
         raise ValueError("the live data entitlement requires DATABENTO_API_KEY")
     sunday = week_sunday(trade_day)
     client = db.Live(ts_out=False, reconnect_policy="none", heartbeat_interval_s=HEARTBEAT_SECONDS)
     client.add_stream(sink, exception_callback=sink.failed)
+    from .live_contract import LiveContract
+    contract = LiveContract(contract_file, profile["source"]) if contract_file else None
+    replays_remaining = 2 if contract else 1
+
     def control(record):
+        nonlocal replays_remaining
         if isinstance(record, ErrorMsg):
             sink.failed(CaptureFailure(f"Databento feed error {int(record.code)}"))
         elif isinstance(record, SystemMsg) and record.code == SystemCode.REPLAY_COMPLETED:
+            replays_remaining -= 1
+            if replays_remaining != 0:
+                return
+            if contract:
+                contract.publish()
             with sink.writer.db:
                 sink.writer.db.execute("INSERT OR IGNORE INTO live_starts VALUES(?,?)",
                                        (sink.writer.connection_id, sink.writer.position))
+        elif contract:
+            contract.observe(record)
 
     client.add_callback(control, exception_callback=sink.failed)
     connected = False
@@ -146,6 +158,9 @@ def live(trade_day, profile, sink):
         client.subscribe(dataset=profile["source"], schema=profile["schema"], symbols=profile["symbol"],
                          stype_in="continuous", start=datetime.combine(sunday, wall_time(), timezone.utc))
         connected = True
+        if contract:
+            client.subscribe(dataset=profile["source"], schema="definition", symbols=profile["symbol"],
+                             stype_in="continuous", start=0)
         subscribed_at = time.monotonic()
         client.start()
         while not sink.done.wait(0.1):
@@ -184,6 +199,7 @@ def main():
     parser.add_argument("--source", choices=("purchased", "live"), required=True)
     parser.add_argument("--message-budget", type=int, required=True)
     parser.add_argument("--ready-file", type=Path)
+    parser.add_argument("--live-contract-file", type=Path)
     parser.add_argument("--greg-go", action="store_true")
     args = parser.parse_args()
     if not args.greg_go or args.message_budget <= 0:
@@ -217,7 +233,7 @@ def main():
             if args.source == "purchased":
                 purchased(data_root, args.trade_day, profile, sink)
             else:
-                live(args.trade_day, profile, sink)
+                live(args.trade_day, profile, sink, args.live_contract_file)
             writer.status = sink.reason or "end of purchased input"
         outcome = writer.status
     except CaptureFailure as exc:

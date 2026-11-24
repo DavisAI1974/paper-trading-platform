@@ -5,23 +5,25 @@ Work in [DavisAI1974/paper-trading-platform](https://github.com/DavisAI1974/pape
 ## The two lists
 
 - [Greg's original 35-item wishlist in markets-data, archived November 23](https://github.com/DavisAI1974/markets-data/blob/111e46bc156ecf05bfa25814cea3b9c7040a5fc9/tasks/family-research-20261022/research-union-current/paper-trading-20261123/OWN_PLATFORM_WISHLIST_20261123.md) preserves the original wording and decisions.
-- [Running 35-item checklist on the PR branch, with completed items checked](https://github.com/DavisAI1974/paper-trading-platform/blob/codex/strategy-trades-and-mbo-capture/docs/platform/OWN_PLATFORM_WISHLIST_20261123.md) records current progress. At handoff, 16 of 35 are checked: 3, 4, 5, 8, 10, 11, 13, 14, 15, 18, 19, 21, 22, 29, 33 and 34.
+- [Running 35-item checklist on the PR branch, with completed items checked](https://github.com/DavisAI1974/paper-trading-platform/blob/codex/strategy-trades-and-mbo-capture/docs/platform/OWN_PLATFORM_WISHLIST_20261123.md) records current progress.
 
 Use the marked checklist as the sole running list. Update the text beneath the relevant number in the same commit as the work. A draft implementation stays unchecked until the checklist's upstream or main criterion is met.
 
-## Work split for the five handoff items
+## Current ownership
 
-Greg transferred #17 and its two family decision agents to Codex. Ccode retains #2, #23, #26 and #35 and can commit and push those changes to this branch and draft PR. Fetch the latest head and integrate any concurrent commits before pushing.
+Codex owns **1–19** and is working on **1**, live NG paper trading. Ccode owns **20–35**, including the independent review under #35. Both use the same branch and draft PR. Commit each change with its status under the corresponding number in the running checklist. Keep work on one number at a time and record any blocker that needs Greg.
 
-Codex is on **17**. Keep work to one number at a time. If the current item needs a decision, credential or permission only Greg can supply, record the exact blocker under that number before taking up another. Ccode owns the other agents. Frankie and the assigned agents choose placement and size for every strategy.
+The family agents supplied placement, size and manager instructions for all 32 strategies. The [NGX3 plan](../../paper_platform/execution_plans/ngx3-12be6ea6e40347def5f574b1c2f36093bba99200.json) records the purchased-tape contract and those decisions. The live workflow takes the policies from that plan and obtains the contract definition from the feed.
 
-| Order | Wishlist item | Where it stands and what to do |
-| --- | --- | --- |
-| 1 | **17 · Paper execution** | Codex collected decisions from both family agents and committed the [NGX3 plan for all 32 strategies](../../paper_platform/execution_plans/ngx3-12be6ea6e40347def5f574b1c2f36093bba99200.json). The [CL answers](https://github.com/DavisAI1974/markets-data/blob/12be6ea6e40347def5f574b1c2f36093bba99200/tasks/family-research-20261022/research-union-current/paper-trading-20261123/item17-20261124/CL-answer.json) and [CX answers](https://github.com/DavisAI1974/markets-data/blob/12be6ea6e40347def5f574b1c2f36093bba99200/tasks/family-research-20261022/research-union-current/paper-trading-20261123/item17-20261124/CX-answer.json) give each agent's reasons. The plan includes all six managers' parent decisions. Frankie's input and authorized paper execution remain pending. |
-| 2 | **2 · All 32 independent strategies** | CL01–CL17 and CX01–CX15 are in the [catalogue](../../paper_platform/rules). A configured rule gets its own venue and inventory. Use the item 17 plan to account for all 32 and finish any wiring a selected rule or manager needs. Preserve separate order, fill and trade records for each. End-to-end operation remains unproven. |
-| 3 | **23 · Budget stops, including agents** | The paper runner has message, event and 5.75-hour limits. It starts the Pushover stop notice independently of receipt and relay delivery. Ccode owns the remaining agent-run budget handling. Apply the authorized budget in the agent launcher, stop work when it is reached and route the reason to Greg's phone. If the applicable budget is unspecified, identify the missing decision. |
-| 4 | **26 · Phone notices** | Greg selected Render for the HTML/htmx phone UI and Pushover for budget stops, run stops and failures. The repo has the two Pushover Actions secret names configured. Render connection settings and actual phone receipt are outstanding. Finish the service wiring for the named events. Keep secret values in the service secret stores. Phone delivery evidence waits for permission to exercise it. [Render blueprint](../../paper_platform/render.yaml) · [Notice sender](../../paper_platform/run.py) |
-| 5 | **35 · Claude's independent review** | Codex's implementation is in this draft. Ccode owns arranging the independent Claude review after the build and recording any adjustments against their original wishlist numbers. Greg's current instruction defers checks, validation and tests. Leave the review pending during this build-only pass. |
+## Existing Ccode handoff notes
+
+The [running list](OWN_PLATFORM_WISHLIST_20261123.md) carries the latest status for all sixteen Ccode items.
+
+| Item | Handoff detail |
+| --- | --- |
+| **23 · Budget stops, including agents** | The paper runner has message, event and 5.75-hour limits. It starts the Pushover stop notice independently of receipt and relay delivery. Ccode owns the remaining agent-run budget handling. Apply the authorized budget in the agent launcher, stop work when it is reached and route the reason to Greg's phone. If the applicable budget is unspecified, identify the missing decision. |
+| **26 · Phone notices** | Greg selected Render for the HTML/htmx phone UI and Pushover for budget stops, run stops and failures. The repo has the two Pushover Actions secret names configured. Render connection settings and actual phone receipt are outstanding. Finish the service wiring for the named events. Keep secret values in the service secret stores. Phone delivery evidence waits for permission to exercise it. [Render blueprint](../../paper_platform/render.yaml) · [Notice sender](../../paper_platform/run.py) |
+| **35 · Claude's independent review** | Codex's implementation is in this draft. Ccode owns arranging the independent Claude review after the build and recording any adjustments against their original wishlist numbers. Greg's current instruction defers checks, validation and tests. Leave the review pending during this build-only pass. |
 
 ## Earlier Codex work
 

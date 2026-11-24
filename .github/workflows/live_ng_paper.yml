@@ -3,12 +3,13 @@ on:
   workflow_dispatch:
     inputs:
       greg_go:
-        description: Greg authorizes this capture
+        description: Greg authorizes this live-feed paper session
         type: boolean
         default: false
       execution_plan:
-        description: Committed agent plan filename or inline execution plan JSON
+        description: Strategy policies to use with the NG contract identified by the live feed
         type: string
+        default: ngx3-12be6ea6e40347def5f574b1c2f36093bba99200.json
         required: true
       event_budget:
         description: Maximum ordinary journal events

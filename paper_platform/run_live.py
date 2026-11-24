@@ -2,6 +2,7 @@
 
 import argparse
 from datetime import date
+import json
 import os
 from pathlib import Path
 import signal
@@ -12,6 +13,8 @@ import threading
 import time
 
 from root.calendar import week_sunday
+from .live_contract import bind_live_plan
+from .run import read_agent_plan
 from .run_clock import LIMIT_SECONDS, run_start_ns
 
 
@@ -54,7 +57,12 @@ def main():
         from .run import notify
         notify("5.75-hour limit reached before capture startup", "preflight")
         return 1
-    plan = os.environ["EXECUTION_PLAN"]
+    required = ("DATABENTO_API_KEY", "PAPER_CAPTURE_KEY", "PAPER_RELAY_URL", "PAPER_RELAY_TOKEN",
+                "PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY")
+    missing = [name for name in required if not os.environ.get(name)]
+    if missing:
+        parser.error("missing live paper settings: " + ", ".join(missing))
+    plan, plan_source = read_agent_plan(os.environ["EXECUTION_PLAN"])
     common = ["--data", args.data, "--trade-day", args.trade_day]
     week = week_sunday(args.trade_day).isoformat()
     db = args.data / "paper-trading" / "captures" / "nymex-ng" / week / "live.sqlite"
@@ -65,21 +73,26 @@ def main():
     recorder = paper = backup = None
     with tempfile.TemporaryDirectory() as temporary:
         ready = Path(temporary) / "connection"
+        contract_file = Path(temporary) / "definition.dbn"
+        bound_plan = Path(temporary) / "live-ng-plan.json"
         try:
             backup = launch("capture_backup", ["follow", *common, "--checkout", args.checkout, "--source", "live"],
                             {"PAPER_CAPTURE_KEY"})
             recorder = launch("record_mbo", [*common, "--source", "live", "--message-budget", args.message_budget,
-                                              "--ready-file", ready, "--greg-go"], notices | {"DATABENTO_API_KEY"})
-            while not ready.is_file():
+                                              "--ready-file", ready, "--live-contract-file", contract_file,
+                                              "--greg-go"], notices | {"DATABENTO_API_KEY"})
+            while not contract_file.is_file():
                 if stopping.wait(0.1) or time.monotonic() >= deadline:
                     return 1
                 if recorder.poll() is not None or backup.poll() is not None:
-                    raise RuntimeError("capture stopped before opening a new connection")
+                    raise RuntimeError("capture stopped before supplying the live NG contract definition")
             connection = int(ready.read_text(encoding="ascii"))
             if stopping.is_set() or time.monotonic() >= deadline or recorder.poll() is not None or backup.poll() is not None:
                 return 1
+            resolved = bind_live_plan(plan, plan_source, contract_file)
+            bound_plan.write_text(json.dumps(resolved), encoding="utf-8")
             paper = launch("run", [*common, "--market", "nymex-ng", "--message-budget", args.message_budget,
-                                   "--event-budget", args.event_budget, "--agent-plan", plan, "--capture", db,
+                                   "--event-budget", args.event_budget, "--execution-plan", bound_plan, "--capture", db,
                                    "--capture-connection", connection, "--greg-go"],
                            notices | {"PAPER_RELAY_TOKEN", "MARKETS_DATA_TOKEN"})
             while paper.poll() is None and recorder.poll() is None and backup.poll() is None:
