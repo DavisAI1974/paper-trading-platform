@@ -103,6 +103,28 @@ def card(event, profile):
     return "<article>" + "".join(fields) + "</article>"
 
 
+def stop_details(state, rule=""):
+    if state.get("status") == "active":
+        return ""
+    fields = []
+    source = state.get("last_source") or {}
+    end = state.get("capture_end") or {}
+    if end:
+        fields.append(f"<p>Recorder · {e(end.get('status', 'unknown'))}</p>")
+    for label, value in (("Capture connection", end.get("connection_id")),
+                         ("Last recorded MBO position", end.get("last_mbo_position")),
+                         ("Last processed tape position", source.get("cursor")),
+                         ("Last recorder receive time (ns)", end.get("last_received_ns"))):
+        if value is not None:
+            fields.append(f"<small>{label} · {e(value)}</small>")
+    for owner, positions in (state.get("paper_inventory") or {}).items():
+        if rule and rule != owner:
+            continue
+        for trade_id, qty in positions.items():
+            fields.append(f"<p>{e(owner)} · {e(qty)} contracts remaining</p><small>Trade · {e(trade_id)}</small>")
+    return "".join(fields)
+
+
 def page(market, rule, state, history=(), *, live=True, run="", trades=(), runs=()):
     profiles = markets()
     profile = profiles[market]
@@ -148,6 +170,7 @@ def page(market, rule, state, history=(), *, live=True, run="", trades=(), runs=
         asset=e(profile["asset"]),
         venue=e(profile["venue"]),
         status=e(state["status"]),
+        stop_details=stop_details(state, rule),
         markets=options([(k, v["name"]) for k, v in profiles.items()], market),
         rules=options([("", "All strategies")] + [(k, k) for k in profile["rules"]], rule or ""),
         run=e(run),

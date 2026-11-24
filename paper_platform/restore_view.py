@@ -26,11 +26,14 @@ def batches(folder, receipt, size=128):
             events += 1
             final = events == receipt["events"]
             state = dict(run=folder.name, market=receipt["market"], events=events,
-                         status="active", code_commit=receipt["code_commit"])
+                         status="active", code_commit=receipt["code_commit"], trade_day=receipt.get("trade_day"))
             if final:
                 if event["kind"] != "status" or event.get("reason") != receipt["status"]:
                     raise ValueError("journal is missing the terminal status from its receipt")
                 state.update(status=receipt["status"], cursor=receipt["delivered"] - 1)
+                for field in ("capture_end", "last_source"):
+                    if receipt.get(field) is not None:
+                        state[field] = receipt[field]
                 if "remaining_paper_inventory" in receipt:
                     state["paper_inventory"] = receipt["remaining_paper_inventory"]
             batch.append(dict(event=wire(event), status=wire(state)))

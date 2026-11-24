@@ -11,7 +11,7 @@ form{display:flex;gap:.7rem;align-items:end;flex-wrap:wrap;margin:1rem 0}label{d
 details li{overflow-wrap:anywhere}details a{color:#9ce6ba}
 .spec{white-space:pre-wrap;color:#ccdad7}summary{cursor:pointer}
 </style><script defer src="/static/htmx-2.0.8/htmx.min.js"></script></head><body hx-history="false">
-<header><small>$venue · $asset · Paper trading</small><h1>$title</h1><p id="status" role="status">$status</p></header>
+<header><small>$venue · $asset · Paper trading</small><h1>$title</h1><p id="status" role="status">$status</p><div id="stop-details">$stop_details</div></header>
 <form method="get" action="/" hx-boost="true" hx-push-url="true" $hide_filters><input type="hidden" name="run" value="$run"><label>Market<select name="market">$markets</select></label><label>Strategy<select name="rule">$rules</select></label><button>Show</button></form>
 $run_history
 $definition
@@ -34,7 +34,8 @@ if(list.dataset.stream){
     }
   };
   stream.addEventListener('finished',({data})=>{
-    const {status}=JSON.parse(data);
+    const {status,stop_html}=JSON.parse(data);
+    if(stop_html) document.getElementById('stop-details').innerHTML=stop_html;
     if(status) statusLine.textContent=status;
     stream.close();
   });
