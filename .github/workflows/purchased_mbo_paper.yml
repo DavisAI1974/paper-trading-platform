@@ -136,7 +136,8 @@ jobs:
           PHONE_PAGE: ${{ inputs.phone_page }}
           STOP_AFTER_MINUTES: ${{ inputs.stop_after_minutes }}
           MARKETS_DATA_TOKEN: ${{ secrets.MARKETS_DATA_TOKEN }}
-          PAPER_RELAY_URL: ${{ vars.PAPER_RELAY_URL }}
+          # The phone page's address is not a secret. The variable, when set, takes its place.
+          PAPER_RELAY_URL: ${{ vars.PAPER_RELAY_URL || 'https://ng-paper-viewer.onrender.com' }}
           PAPER_RELAY_TOKEN: ${{ secrets.PAPER_RELAY_TOKEN }}
           PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
