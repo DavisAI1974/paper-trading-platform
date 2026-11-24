@@ -60,7 +60,8 @@ class Publication:
         self.url = url
         self.push_url = push_url
         self.http = requests.Session()
-        self.http.headers["Authorization"] = "Bearer " + os.environ["PAPER_RELAY_TOKEN"]
+        if url:  # no address: a run Greg started without the phone page (--no-phone-page)
+            self.http.headers["Authorization"] = "Bearer " + os.environ["PAPER_RELAY_TOKEN"]
         self.env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
         if push_url.lower().startswith("https://"):
             basic = base64.b64encode(("x-access-token:" + os.environ["MARKETS_DATA_TOKEN"]).encode()).decode()
@@ -104,6 +105,11 @@ class Publication:
             raise RuntimeError("Render event delivery failed")
 
     def deliver_pending(self, pending, *, final=False):
+        if not self.url:
+            # A run without the phone page: the journal goes to markets-data alone.
+            with self.s.lock:
+                pending.clear()
+            return
         while final or self.s.state == "active":
             # stop() can append administrative orders from the watchdog thread.
             with self.s.lock:
@@ -208,6 +214,9 @@ def main():
     plans.add_argument("--agent-plan")
     plans.add_argument("--replay-receipt", type=Path)
     p.add_argument("--greg-go", action="store_true")
+    # Greg's switch for a run without the phone page: the journal still goes to markets-data and the
+    # phone notices still go. Without the switch a missing page address refuses the start, as before.
+    p.add_argument("--no-phone-page", action="store_true")
     args = p.parse_args()
     if args.replay_receipt and not args.replay_capture:
         p.error("select the stored live capture for receipt-based replay")
@@ -225,11 +234,12 @@ def main():
             pass
         p.error(reason)
 
-    url = os.environ.get("PAPER_RELAY_URL", "").rstrip("/")
-    if (urlsplit(url).scheme != "https" or not urlsplit(url).hostname or "@" in urlsplit(url).netloc
+    url = "" if args.no_phone_page else os.environ.get("PAPER_RELAY_URL", "").rstrip("/")
+    if not args.no_phone_page and (
+            urlsplit(url).scheme != "https" or not urlsplit(url).hostname or "@" in urlsplit(url).netloc
             or urlsplit(url).query or urlsplit(url).fragment):
         refuse("Render must use an HTTPS URL")
-    for key in ("PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY", "PAPER_RELAY_TOKEN"):
+    for key in ("PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY") + (() if args.no_phone_page else ("PAPER_RELAY_TOKEN",)):
         if not os.environ.get(key):
             refuse("required run credential missing: " + key)
     try:
@@ -246,7 +256,10 @@ def main():
     try:
         if time.monotonic() >= started + LIMIT_SECONDS:
             raise PreflightDeadline("5.75-hour limit reached before paper startup")
-        requests.get(url + "/health", timeout=90).raise_for_status()
+        if url:
+            requests.get(url + "/health", timeout=90).raise_for_status()
+        else:
+            print("no phone page for this run (--no-phone-page): the journal goes to markets-data alone", flush=True)
         receipt = None
         if args.replay_receipt:
             receipt = json.loads(args.replay_receipt.read_text(encoding="utf-8"))

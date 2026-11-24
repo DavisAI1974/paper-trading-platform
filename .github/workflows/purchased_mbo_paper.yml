@@ -37,6 +37,10 @@ on:
         description: Maximum ordinary journal events
         required: true
         type: string
+      phone_page:
+        description: Send the events to the phone page. Uncheck to run with the git record and the phone notices only
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -125,6 +129,7 @@ jobs:
           MARKET: ${{ inputs.market }}
           MESSAGE_BUDGET: ${{ inputs.message_budget }}
           EVENT_BUDGET: ${{ inputs.event_budget }}
+          PHONE_PAGE: ${{ inputs.phone_page }}
           MARKETS_DATA_TOKEN: ${{ secrets.MARKETS_DATA_TOKEN }}
           PAPER_RELAY_URL: ${{ vars.PAPER_RELAY_URL }}
           PAPER_RELAY_TOKEN: ${{ secrets.PAPER_RELAY_TOKEN }}
@@ -139,5 +144,9 @@ jobs:
           plan_args=(--agent-plan "$EXECUTION_PLAN")
           if [[ -n "$ORIGINAL_RUN" ]]; then
             plan_args=(--replay-receipt "$GITHUB_WORKSPACE/original-journal/paper-trading/$ORIGINAL_RUN/receipt.json")
+          fi
+          # A receipt replay runs the earlier commit's code, which has no such switch.
+          if [[ "$PHONE_PAGE" == false && -z "$ORIGINAL_RUN" ]]; then
+            plan_args+=(--no-phone-page)
           fi
           exec python -B -m paper_platform.run "${capture_args[@]}" "${plan_args[@]}" --greg-go --data "$GITHUB_WORKSPACE/purchased-inputs" --market "$MARKET" --trade-day "$TRADE_DAY" --message-budget "$MESSAGE_BUDGET" --event-budget "$EVENT_BUDGET"
