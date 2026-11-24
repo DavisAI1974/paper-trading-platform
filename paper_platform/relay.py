@@ -14,7 +14,8 @@ from pydantic import BaseModel
 
 from .rulebook import catalogue
 from .market import markets
-from .views import card, page
+from .trades import trade_rows
+from .views import card, page, trade_card
 
 
 class Packet(BaseModel):
@@ -37,6 +38,12 @@ def relay():
         db.executescript("""
             CREATE TABLE IF NOT EXISTS events(run TEXT, sequence INTEGER, body TEXT NOT NULL,
                 PRIMARY KEY(run,sequence));
+            CREATE INDEX IF NOT EXISTS paper_order_trade ON events(
+                run, json_extract(body,'$.trade_id'), json_extract(body,'$.action')
+            ) WHERE json_extract(body,'$.kind')='paper order';
+            CREATE INDEX IF NOT EXISTS paper_order_rule ON events(
+                run, json_extract(body,'$.rule'), sequence
+            ) WHERE json_extract(body,'$.kind')='paper order';
             CREATE TABLE IF NOT EXISTS sessions(run TEXT PRIMARY KEY, body TEXT NOT NULL, first_ns TEXT NOT NULL);
         """)
 
@@ -116,6 +123,16 @@ def relay():
         all_rules = catalogue()
         return {k: all_rules[k] for k in profiles[market]["rules"]}
 
+    @app.get("/api/trades", dependencies=[Depends(viewer)])
+    def trades(rule: str, run: str | None = None, market: str = "nymex-ng"):
+        profiles = markets()
+        if market not in profiles or rule not in profiles[market]["rules"]:
+            raise HTTPException(404, "unknown market or rule")
+        with connect() as db:
+            db.execute("BEGIN")
+            state = session_state(db, run, market)
+            return trade_rows(db, state.get("run"), rule)
+
     def stream_rows(after, rule, follow, run, market, html):
         profiles = markets()
         if market not in profiles or rule and rule not in profiles[market]["rules"]:
@@ -130,18 +147,32 @@ def relay():
                     db.execute("BEGIN")
                     state = session_state(db, current, market)
                     batch = []
+                    trade_updates = {}
                     if "run" in state:
                         current = state["run"]
                         batch = db.execute(
                             "SELECT sequence,body FROM events WHERE run=? AND sequence>? ORDER BY sequence LIMIT 256",
                             (current, cursor),
                         ).fetchall()
+                        if html and rule:
+                            for seq, body in batch:
+                                event = json.loads(body)
+                                if event.get("rule") != rule or event.get("kind") != "paper order":
+                                    continue
+                                if event.get("action") in ("open", "close", "exit"):
+                                    rows_at_event = trade_rows(db, current, rule, trade_id=event["trade_id"], through=seq)
+                                    if rows_at_event:
+                                        trade_updates[seq] = rows_at_event[0]
                 for cursor, body in batch:
                     event = json.loads(body)
                     if rule and event.get("rule") != rule:
                         continue
                     if html:
-                        data = json.dumps(dict(html=card(event, profile), status=state["status"]))
+                        payload = dict(html=card(event, profile), status=state["status"])
+                        if cursor in trade_updates:
+                            trade = trade_updates[cursor]
+                            payload.update(trade_id=trade["trade_id"], trade_html=trade_card(trade, profile))
+                        data = json.dumps(payload)
                         yield f"id: {current}/{cursor}\nevent: message\ndata: {data}\n\n"
                     else:
                         yield body + "\n"
@@ -199,6 +230,8 @@ def relay():
                 "ORDER BY sequence DESC LIMIT 100",
                 (state.get("run"), rule, rule),
             ).fetchall()
-        return page(market, rule, state, [json.loads(r[0]) for r in reversed(recent)], run=run)
+            trades = trade_rows(db, state.get("run"), rule) if rule else []
+        return page(market, rule, state, [json.loads(r[0]) for r in reversed(recent)],
+                    run=run or state.get("run", ""), trades=trades)
 
     return app

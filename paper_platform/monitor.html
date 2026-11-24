@@ -7,17 +7,28 @@
 p{margin:.35rem 0}article{padding:1rem 0;border-bottom:1px solid #344146}small{display:block;color:#b5c6c5;overflow-wrap:anywhere}
 select,button{font:inherit;padding:.35rem;background:#1b292a;color:#fff;border:1px solid #70817b;border-radius:.3rem}
 form{display:flex;gap:.7rem;align-items:end;flex-wrap:wrap;margin:1rem 0}label{display:grid;font-size:.9rem}#status{color:#9ce6ba}
+#trades:not(:empty) + .empty-trades{display:none}
 .spec{white-space:pre-wrap;color:#ccdad7}summary{cursor:pointer}
 </style></head><body>
 <header><small>$venue · $asset · Paper trading</small><h1>$title</h1><p id="status" role="status">$status</p></header>
 <form method="get" $hide_filters><input type="hidden" name="run" value="$run"><label>Market<select name="market">$markets</select></label><label>Strategy<select name="rule">$rules</select></label><button>Show</button></form>
 $definition
+$trade_section
 <section id="events" data-stream="$stream" aria-label="Trading events">$cards</section>
 <script>
 const list=document.querySelector('#events'),statusLine=document.querySelector('#status');
 if(list.dataset.stream){
   const stream=new EventSource(list.dataset.stream);
-  stream.onmessage=({data})=>{const row=JSON.parse(data);list.insertAdjacentHTML('afterbegin',row.html);statusLine.textContent=row.status};
+  stream.onmessage=({data})=>{
+    const row=JSON.parse(data);
+    list.insertAdjacentHTML('afterbegin',row.html);
+    statusLine.textContent=row.status;
+    if(row.trade_html){
+      const existing=document.getElementById('trade-'+row.trade_id);
+      if(existing) existing.outerHTML=row.trade_html;
+      else document.getElementById('trades').insertAdjacentHTML('afterbegin',row.trade_html);
+    }
+  };
   stream.addEventListener('finished',({data})=>{
     const {status}=JSON.parse(data);
     if(status) statusLine.textContent=status;
