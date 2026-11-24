@@ -22,6 +22,12 @@ class GitJournal:
         # publishes the newest boundary waiting and leaves out the ones before it. Each boundary is a longer
         # prefix of the same files, so the newest holds every order and fill of the ones left out.
         self.newest_only = newest_only
+        # Each push writes the whole journal file again as a new git object on the runner. Over a run of
+        # hours, a push for every order and fill would write it thousands of times. With newest_only the
+        # pushes are spaced: at most one every `spacing` seconds, the last one at once. Ccode's figure.
+        self.spacing = 10
+        self.next_push = 0.0
+        self.closing = threading.Event()
         self.session = session
         self.git = publication.command
         self.push_url = publication.push_url
@@ -142,6 +148,9 @@ class GitJournal:
         cut = None
         try:
             while (cut := self.queue.get()) is not None:
+                while (self.newest_only and cut.trigger != "final" and time.monotonic() < self.next_push
+                       and not self.closing.wait(0.25)):
+                    pass
                 while self.newest_only and not self.queue.empty():
                     newer = self.queue.get()
                     if newer is None:
@@ -149,6 +158,7 @@ class GitJournal:
                         break
                     cut = newer
                 self._publish(cut)
+                self.next_push = time.monotonic() + self.spacing
         except Exception as error:
             with self.progress:
                 self.failed_cut, self.error = cut, error
@@ -158,6 +168,7 @@ class GitJournal:
     def finish(self):
         # Session.stop() has closed the journal and written its receipt. Include
         # administrative orders and fills queued during shutdown before the receipt.
+        self.closing.set()
         try:
             try:
                 with self.session.lock:

@@ -149,6 +149,9 @@ class Publication:
         )
         if status["status"] == "active":
             status.pop("capture_end", None)
+            # The page shows the contracts held only once a run is over. Sent with every row of a run that
+            # holds hundreds of trades open, the list made each post many times the size of its row.
+            status.pop("paper_inventory", None)
         else:
             status["capture_end"] = event.get("capture_end")
             status["last_source"] = event.get("last_source")
