@@ -80,6 +80,13 @@ line here is a result.
 6. 2026-11-24, Claude. Each ledger line carries its rule's own "right" or "wrong". They have not been tallied:
    the feed is not scored.
 
+7. 2026-11-24, Greg. RICHER DATA IS COMING: "we will have richer data to run from in a little while so we don't need
+   to make system around thin data". So nothing more is built to fit this feed's thinness. What exists only
+   because the feed is thin, and is to be dropped or redone when the richer feed arrives: the stand-ins S1 to S7
+   (the feed's millisecond clock, no event mark, the quote read from the prints only, the late closes), the gap
+   read from the sequence number, the handling of prints with no side in the fifteen, and the six rules that
+   cannot run. The rules themselves take plain events and know nothing of tastytrade, so they carry over.
+
 ## D. Runs
 
 (Each live run is added here when it has been made: the date, how long, how many orders, where its record is, and
