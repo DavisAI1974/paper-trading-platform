@@ -174,6 +174,15 @@ line here is a result.
     a picture for each paper trade (the prints, both quotes and the two lines from its open to its close), and/or
     the links from each ledger line to its rule version and the finding the rule rests on.
 
+25. 2026-11-24, Greg: "I thought the new agent program was supposed to convert the handoffs into graphs so theere
+    isn't so much to read?" IT IS SUPPOSED TO, AND THAT PART IS NOT BUILT. In the graph adoption plan (Markets
+    `research/kalshi/frankie_boss/CLAUDE_ARCH_PLAN_GRAPH_ENGINEERING_ADOPTION_20261123.md`) turning the handoffs
+    into the knowledge graph is stage 4 (4b: the scout on Haiku extracts each handoff into claims tied to their
+    source) and starting a session from the graph instead of the handoff pile is stage 5. Only stage 1 (the four
+    agents) and stage 7 (paper trading) have been started; stages 2 to 6 and 8 are filed, waiting on his word.
+    No graph exists yet (markets-data has no `graph/` folder). Handoff W was written as prose, like the ones
+    before it.
+
 ## D. Runs
 
 1. 2026-11-23 evening (trade day Tue Nov 24, 2026), 8:05 pm to 8:12 pm Eastern. THE FIRST RUN WITH ORDERS, on Greg's
