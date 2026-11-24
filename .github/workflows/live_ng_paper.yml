@@ -70,47 +70,9 @@ jobs:
           DATABENTO_API_KEY: ${{ secrets.DATABENTO_API_KEY }}
           PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
-        run: |
-          python -m paper_platform.capture_backup follow --data purchased-inputs --checkout checkpoint --trade-day "$TRADE_DAY" --source "$SOURCE" &
-          backup_pid=$!
-          python -m paper_platform.record_mbo --data purchased-inputs --trade-day "$TRADE_DAY" --source "$SOURCE" --message-budget "$DELIVERY_BUDGET" --greg-go &
-          recorder_pid=$!
-          trap 'kill -TERM "$recorder_pid" "${paper_pid:-}" 2>/dev/null || true' INT TERM EXIT
-          db=$(python -c 'import os; from datetime import date; from root.calendar import week_sunday; print("purchased-inputs/paper-trading/captures/nymex-ng/"+str(week_sunday(date.fromisoformat(os.environ["TRADE_DAY"])))+"/live.sqlite")')
-          # Wait for this workflow's writer, including when an older checkpoint was restored.
-          python - "$db" "$recorder_pid" <<'PY'
-          import os, sqlite3, sys, time
-          from pathlib import Path
-          from contextlib import closing
-          path = Path(sys.argv[1]).resolve()
-          while True:
-              os.kill(int(sys.argv[2]), 0)
-              if path.exists():
-                  with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as db:
-                      try:
-                          row = db.execute("SELECT status FROM connections ORDER BY id DESC LIMIT 1").fetchone()
-                      except sqlite3.OperationalError:
-                          row = None
-                      if row and row[0] == "recording":
-                          break
-              time.sleep(0.2)
-          PY
-          python -m paper_platform.run --greg-go --data purchased-inputs --trade-day "$TRADE_DAY" --market nymex-ng --message-budget "$DELIVERY_BUDGET" --event-budget "$EVENT_BUDGET" --agent-plan "$EXECUTION_PLAN" --capture "$db" &
-          paper_pid=$!
-          set +e
-          wait -n -p finished "$paper_pid" "$recorder_pid" "$backup_pid"
-          result=$?
-          if [[ "${finished:-}" == "$backup_pid" ]]; then result=1; fi
-          if [[ "${finished:-}" != "$paper_pid" ]]; then
-            kill -TERM "$paper_pid" 2>/dev/null
-            wait "$paper_pid" || result=1
-          fi
-          kill -TERM "$recorder_pid" 2>/dev/null
-          if [[ "${finished:-}" != "$recorder_pid" ]]; then wait "$recorder_pid" || result=1; fi
-          kill "$backup_pid" 2>/dev/null
-          wait "$backup_pid" 2>/dev/null
-          trap - INT TERM EXIT
-          exit "$result"
+        run: >
+          python -m paper_platform.run_live --greg-go --checkout checkpoint --data purchased-inputs
+          --trade-day "$TRADE_DAY" --message-budget "$DELIVERY_BUDGET" --event-budget "$EVENT_BUDGET"
       - name: Persist the final committed deliveries
         if: ${{ always() && steps.restore_capture.outcome == 'success' }}
         run: python -m paper_platform.capture_backup publish --data purchased-inputs --checkout checkpoint --trade-day "$TRADE_DAY" --source "$SOURCE"
