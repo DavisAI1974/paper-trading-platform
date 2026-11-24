@@ -3,7 +3,9 @@
 import argparse
 import base64
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+from itertools import islice
 import json
 import os
 from pathlib import Path
@@ -134,8 +136,30 @@ class Publication:
                         if target["next"] <= old["sequence"] <= event["sequence"]:
                             self.post_again(old)
                 return
-        if response.status_code != 200:
+        if response.status_code != 200 or response.json().get("next") != event["sequence"] + 1:
             raise RuntimeError("Render event delivery failed")
+
+    def deliver_pending(self, pending, *, final=False):
+        while final or self.s.state == "active":
+            # stop() can append administrative orders from the watchdog thread.
+            with self.s.lock:
+                events = list(islice(pending, 128))
+            if not events:
+                return
+            if len(events) == 1:
+                self.send(events[0])
+            else:
+                response = self.http.post(self.url + "/ingest/batch",
+                                          json={"packets": [self.packet(event) for event in events]},
+                                          timeout=8, allow_redirects=False)
+                if response.status_code == 409:
+                    # Reuse sequence recovery if the Render cache lost an earlier prefix.
+                    for event in events:
+                        self.send(event)
+                elif response.status_code != 200 or response.json().get("next") != events[-1]["sequence"] + 1:
+                    raise RuntimeError("Render did not acknowledge the journal batch")
+            for _ in events:
+                pending.popleft()
 
     def packet(self, event):
         status = self.s.status()
@@ -233,7 +257,7 @@ def main():
         push_url = writer_remote(args.data)
     except ValueError as error:
         p.error(str(error))
-    s = pub = None
+    s = pub = relay_worker = None
     finished = threading.Event()
     alert_sent = threading.Event()
     why = "failure"
@@ -263,6 +287,7 @@ def main():
             execution_plan=execution_plan, plan_source=plan_source,
         )
         pub = Publication(s, url, push_url)
+        relay_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="render-journal")
         pending = deque()
         s.on_event = pending.append
         with (s.folder / "events.jsonl").open(encoding="utf8") as f:
@@ -305,19 +330,17 @@ def main():
         watcher = threading.Thread(target=guard, daemon=True)
         watcher.start()
 
-        def deliver_relay(*, final=False):
-            while pending and (final or s.state == "active"):
-                pub.send(pending[0])
-                pending.popleft()
-
         def deliver():
-            # One market tick can emit a signal, an order and several fills together.
-            # Take their Git snapshot before an earlier signal can block on Render.
             with s.lock:
                 urgent = any(event["kind"] in ("paper order", "fill") for event in pending)
             if urgent or time.monotonic() - pub.last_push >= 60:
-                pub.push()
-            deliver_relay()
+                delivery = relay_worker.submit(pub.deliver_pending, pending)
+                try:
+                    pub.push()
+                finally:
+                    delivery.result()
+            else:
+                pub.deliver_pending(pending)
 
         while s.state == "active":
             if stopped.is_set():
@@ -381,14 +404,20 @@ def main():
         except Exception:
             errors.append("phone")
         if pub is not None:
+            delivery = None
+            if relay_worker is not None:
+                delivery = relay_worker.submit(pub.deliver_pending, pending, final=True)
             try:
                 pub.push()
             except Exception:
                 errors.append("git")
-            try:
-                deliver_relay(final=True)
-            except Exception:
-                errors.append("relay")
+            if delivery is not None:
+                try:
+                    delivery.result()
+                except Exception:
+                    errors.append("relay")
+                finally:
+                    relay_worker.shutdown()
         if errors:
             try:
                 notify("failure during shutdown: " + ", ".join(errors), s.run if s else "preflight")

@@ -95,6 +95,27 @@ def card(event, profile):
         fields.append(f"<small>{e(event['side'])} {e(event['quantity'])} @ "
                       f"{price(event['fill_price'], profile)} {e(profile['price_unit'])} · {e(event['liquidity'])}</small>")
         fields.append(f"<small>Order {e(event['order_id'])} · Fill {e(event['fill_id'])}</small>")
+    if event["kind"] == "paper order" and event.get("placement"):
+        detail = f"{e(event['order_side'])} {e(event['quantity'])} · {e(event['placement'])}"
+        if event.get("limit_price") is not None:
+            detail += f" · Limit {price(event['limit_price'], profile)} {e(profile['price_unit'])}"
+        fields.append(f"<small>{detail}</small>")
+    if event.get("order_id") and event["kind"] != "fill":
+        fields.append(f"<small>Order {e(event['order_id'])}</small>")
+    if event.get("order_status"):
+        fields.append(f"<small>Order status · {e(event['order_status'])}</small>")
+    elif event.get("execution_event") and event["execution_event"] != event.get("reason"):
+        fields.append(f"<small>{e(event['execution_event'])}</small>")
+    for key, label in (("remaining_quantity", "Order contracts remaining"),
+                       ("remaining_contracts", "Trade inventory remaining")):
+        if event.get(key) is not None:
+            fields.append(f"<small>{label} · {e(event[key])}</small>")
+    if event.get("administrative_reason"):
+        fields.append(f"<small>{e(event['administrative_reason'])}</small>")
+    if event.get("recorded_ns") is not None:
+        seconds, nanos = divmod(int(event["recorded_ns"]), 1_000_000_000)
+        recorded = datetime.fromtimestamp(seconds, ZoneInfo("America/New_York"))
+        fields.append(f"<small>Journal · {recorded:%Y-%m-%d %H:%M:%S}.{nanos:09d} {recorded:%Z}</small>")
     if event.get("entry"):
         fields.append(f"<small>Entry · {prices(event['entry'], profile)} · {e(event['entry']['received'])} ns</small>")
     if "bid" in event or "ask" in event:
@@ -151,7 +172,23 @@ def stop_details(state, rule=""):
     return "".join(fields)
 
 
-def page(market, rule, state, history=(), *, live=True, run="", trades=(), runs=()):
+def run_history(market, rule, runs):
+    return '<details><summary>Recent runs</summary><ul>' + "".join(
+        '<li><a href="/?' + e(urlencode(dict(market=market, rule=rule, run=identifier))) + '">'
+        + (e(day) + " · " if day else "") + e(identifier) + "</a> · " + e(status) + "</li>"
+        for identifier, day, status in runs
+    ) + "</ul></details>" if runs else ""
+
+
+def older_events_link(market, rule, run, before):
+    if before is None:
+        return ""
+    query = e(urlencode(dict(market=market, rule=rule, run=run, before=before)))
+    return (f'<div><a href="/?{query}" hx-get="/event-history?{query}" '
+            'hx-target="closest div" hx-swap="outerHTML">Earlier events</a></div>')
+
+
+def page(market, rule, state, history=(), *, live=True, run="", trades=(), runs=(), earlier=None, archived_page=False, journal_cursor=None):
     profiles = markets()
     profile = profiles[market]
     rules = catalogue()
@@ -183,14 +220,16 @@ def page(market, rule, state, history=(), *, live=True, run="", trades=(), runs=
             for key in profile["rules"]
         )
     history = list(history)
-    query = urlencode(
-        dict(
-            market=market,
-            rule=rule or "",
-            after=history[-1]["sequence"] if history else -1,
-            run=run or state.get("run", ""),
-        )
-    )
+    displayed = state.get("run", "")
+    if journal_cursor is None:
+        journal_cursor = history[-1]["sequence"] if history else -1
+    stream_params = dict(market=market, rule=rule or "", after=journal_cursor)
+    if run:
+        stream_params["run"] = run
+    else:
+        stream_params.update(latest=1, displayed=displayed)
+    query = urlencode(stream_params)
+    latest_url = "/?" + urlencode(dict(market=market, rule=rule))
     return Template(Path(__file__).with_name("monitor.html").read_text(encoding="utf8")).substitute(
         title=e(profile["name"]),
         asset=e(profile["asset"]),
@@ -200,13 +239,13 @@ def page(market, rule, state, history=(), *, live=True, run="", trades=(), runs=
         markets=options([(k, v["name"]) for k, v in profiles.items()], market),
         rules=options([("", "All strategies")] + [(k, k) for k in profile["rules"]], rule or ""),
         run=e(run),
-        run_history=(
-            '<details><summary>Recent runs</summary><ul>' + "".join(
-                '<li><a href="/?' + e(urlencode(dict(market=market, rule=rule, run=identifier))) + '">'
-                + (e(day) + " · " if day else "") + e(identifier) + "</a> · " + e(status) + "</li>"
-                for identifier, day, status in runs
-            ) + "</ul></details>" if runs and live else ""
-        ),
+        displayed_run=e(displayed or run),
+        run_url=e("/?" + urlencode(dict(market=market, rule=rule, run=displayed or run))),
+        hide_run="" if displayed or run else "hidden",
+        earlier=older_events_link(market, rule, displayed, earlier),
+        trade_day=e(state.get("trade_day") or ""),
+        latest_link=f'<a href="{e(latest_url)}">Follow latest run</a>' if run and live else "",
+        run_history=run_history(market, rule, runs) if live else "",
         hide_filters="" if live else 'style="display:none"',
         definition=definition,
         trade_section=(
@@ -216,5 +255,5 @@ def page(market, rule, state, history=(), *, live=True, run="", trades=(), runs=
             '<h2>Events</h2>' if live or rule else ""
         ),
         cards="".join(card(row, profile) for row in reversed(history)),
-        stream=e("/stream?" + query) if live else "",
+        stream=e("/stream?" + query) if live and not archived_page else "",
     )

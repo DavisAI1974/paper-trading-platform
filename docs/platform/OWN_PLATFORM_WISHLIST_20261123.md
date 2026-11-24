@@ -110,11 +110,11 @@
 
 - [ ] **24.** REAL TIME: every signal, order, fill and status the moment it happens, on one page that reads well on a phone. DECIDED
 
-  **In progress.** The server-rendered phone page streams journal events. PR 5 adds native fill events and HTML/htmx navigation. The filtered phone view also shows the stop reason, the last processed input and the recorder endpoint. Hosted delivery is pending.
+  **Built in draft, awaiting hosted delivery.** The Render phone view follows the latest run across stops and reconnects. A selected run stays pinned. Signals, order instructions, individual fills and status changes appear in journal order, newest first on the page. A strategy filter retains run-wide status events. Earlier events are accessible on the same page. The runner sends pending journal events in sequence to Render alongside required Git pushes. An authorized run and hosted phone observation are still needed to demonstrate delivery.
 
 - [ ] **25.** The same events appended to the git record in markets-data, pushed every minute and at once on every order and fill. DECIDED
 
-  **In progress.** The publisher targets markets-data on orders and each minute. PR 5 snapshots each tick containing orders or fills before delivering its events to Render. A retry pushes the pending commit before capturing any newer journal state. Git and relay delivery are attempted independently at shutdown. Operational evidence is pending.
+  **In progress.** The publisher targets markets-data on orders and each minute. PR 5 snapshots each tick containing orders or fills for publication to markets-data. A retry pushes the pending commit before capturing any newer journal state. Git and relay delivery are attempted independently at shutdown. Operational evidence is pending.
 
 - [ ] **26.** A phone notice for: a budget stop, a run stop, a failure. The live store and the notice service are named to Greg before anything is set up. OPEN
 
