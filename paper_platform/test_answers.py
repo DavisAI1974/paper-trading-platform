@@ -169,24 +169,147 @@ def test_an_exception_inside_taking_or_applying_is_journaled():
     assert rows[0]["applied"] is False and "refusal broke" in rows[0]["reason"] and s.answers_applied == 0
 
 
-def test_a_close_with_no_plan_or_no_contract_is_refused_with_a_reason():
+def test_a_close_answer_is_always_journaled_not_applied_with_the_reason():
     from types import SimpleNamespace
-    rows = []
     close = dict(id="a", action="close", trade_id="t", by="x")
-    s = bare_session(Handing(close), rows)
-    s._take_answers(5)
-    assert rows[0]["applied"] is False and rows[0]["reason"] == "the trade holds no paper contract"
     venue = SimpleNamespace(inventory={"t": 1}, active_orders={})
-    execution = SimpleNamespace(venues={"CL01": venue})
+    for plug in (dict(), dict(answer_close=True, execution=SimpleNamespace(venues={"CL01": venue}),
+                              engine=SimpleNamespace(last={"settlement": False}, open={}))):
+        rows = []
+        bare_session(Handing(close), rows, **plug)._take_answers(5)
+        assert len(rows) == 1 and rows[0]["applied"] is False
+        assert rows[0]["reason"] == "closing by answer is not built; the hold rule in force is the give-back exit"
+
+
+def test_malformed_key_marks_an_answer_whatever_its_value():
+    from paper_platform.answers import validate_decision
+    take = dict(action="take", by="x", asked_at_sequence=7)
+    for value in (None, "", 0, False, "why"):
+        assert validate(dict(take, _malformed=value)) is not None
+        assert validate_decision(dict(take, _malformed=value), 7).startswith("malformed: ")
+    assert validate(dict(take, _malformed=None)) == "malformed"
+    assert validate_decision(take, 7) is None
+    assert validate_decision(dict(take, by=""), 7) is not None
+    assert validate_decision({k: v for k, v in take.items() if k != "by"}, 7) is not None
+    assert "colour" in validate_decision(dict(take, colour="red"), 7)
+    assert "colour" in validate(dict(take, colour="red"))
+
+
+def test_a_malformed_null_line_in_a_trial_file_is_refused_and_never_applied(tmp_path):
+    path = tmp_path / "answers.jsonl"
+    path.write_text(line(id="a1", not_before_tape_ns=1))
+    source = TimedAnswers(path)
+    assert [a["id"] for a in source.take(5)] == ["a1"]
+    with path.open("a") as f:
+        f.write(line(id="a2", _malformed=None))  # appended during the trial, no time
+    got = source.take(5)
+    assert len(got) == 1 and validate(got[0]) == "malformed"
+    path.write_text(line(id="a3", _malformed=None, not_before_tape_ns=1))
+    assert TimedAnswers.check(path) == "malformed"
     rows = []
-    s = bare_session(Handing(close), rows, execution=execution, engine=SimpleNamespace(last={"settlement": True}, open={}))
+    s = bare_session(Handing(*got), rows)
     s._take_answers(5)
-    assert rows[0]["reason"] == "inside the settle window"
+    assert rows[0]["applied"] is False and rows[0]["reason"].startswith("malformed: ") and s.answers_applied == 0
+
+
+def test_a_deeply_nested_line_does_not_lose_the_good_line_beside_it(tmp_path):
+    path = tmp_path / "answers.jsonl"
+    deep = "[" * 200000 + "]" * 200000
+    path.write_text(line(id="a1") + deep + "\n" + line(id="a2", action="rule_on"))
+    source = FileAnswers(path)
+    got = source.take()
+    assert len(got) == 3 and got[0]["id"] == "a1" and got[2]["id"] == "a2"
+    assert "RecursionError" in got[1]["_malformed"] or "not JSON" in got[1]["_malformed"]
+    assert validate(got[1]) is not None
+    assert source.offset == path.stat().st_size and source.lines == 3 and source.take() == []
+
+
+def test_an_answer_the_journal_cannot_hold_is_journaled_not_raised():
     rows = []
-    s = bare_session(Handing(dict(close, id="b", trade_id="other")), rows, execution=execution,
-                     engine=SimpleNamespace(last={"settlement": False}, open={}))
+    s = bare_session(Handing(dict(id="a", action="rule_off", rule="CL01", by="x")), rows)
+    real = s.write
+
+    def write(kind, **fields):
+        if fields.get("answer") is not None:
+            raise RecursionError("too deeply nested for the journal")  # what json.dumps does on a very deep answer
+        return real(kind, **fields)
+
+    s.write = write
     s._take_answers(5)
-    assert rows[0]["reason"] == "the trade holds no paper contract"
+    assert len(rows) == 1 and rows[0]["applied"] is False and rows[0]["answer"] is None
+    assert "RecursionError" in rows[0]["reason"]
+
+
+def gate_session(decider, rows):
+    from types import SimpleNamespace
+    s = bare_session(None, rows, decider=decider, run="r", liquidation_available=True, folder=__import__("pathlib").Path("/x"),
+                     decided=dict(asked=0, take=0, skip=0, none=0), waited_ns=0,
+                     answers=None, answer_close=False)
+    import hashlib
+    s.decider_hash = hashlib.sha256()
+    s.execution = None
+    return s
+
+
+def test_the_gate_opens_an_order_only_on_a_valid_take():
+    # Session.record on a stub with no tape and no plan: its journal rows are the stub's list, no engine is called.
+    sig = dict(action="open", rule="CL01", side="buy", trade_id="t1", received=5)
+
+    class Returns:
+        def __init__(self, what):
+            self.what = what
+
+        def ask(self, question):
+            if isinstance(self.what, Exception):
+                raise self.what
+            return self.what
+
+    def run(what):
+        rows = []
+        s = gate_session(Returns(what), rows)
+        s.record(dict(sig))
+        return rows, s
+
+    take = dict(action="take", by="x", asked_at_sequence=1)  # the signal row is row 0, the question row 1: sequence 0
+    rows, s = run(dict(take, asked_at_sequence=0))
+    assert [r["kind"] for r in rows] == ["signal", "question", "answer", "paper order"] and rows[2]["action"] == "take"
+    rows, s = run(dict(action="skip", by="x", asked_at_sequence=0))
+    assert [r["kind"] for r in rows] == ["signal", "question", "answer"] and rows[2]["action"] == "skip"
+    for bad in (dict(take, asked_at_sequence=0, _malformed=None), dict(take, asked_at_sequence=0, by=""),
+                dict(take, asked_at_sequence=0, colour=1), dict(take, asked_at_sequence=9), RuntimeError("down"),
+                "text", None):
+        rows, s = run(bad)
+        assert [r["kind"] for r in rows] == ["signal", "question", "answer"], bad
+        assert rows[2]["action"] == "none" and rows[2]["applied"] is False and "t1" in s.answers_unordered
+
+
+def test_a_validator_that_raises_leaves_no_order(monkeypatch):
+    import paper_platform.session as session_module
+    monkeypatch.setattr(session_module, "validate_decision", lambda *a: (_ for _ in ()).throw(KeyError("x")))
+    rows = []
+
+    class Take:
+        def ask(self, question):
+            return dict(action="take", by="x", asked_at_sequence=0)
+
+    s = gate_session(Take(), rows)
+    s.record(dict(action="open", rule="CL01", side="buy", trade_id="t1", received=5))
+    assert [r["kind"] for r in rows] == ["signal", "question", "answer"] and rows[2]["action"] == "none"
+    assert "KeyError" in rows[2]["reason"]
+
+
+def test_a_managers_row_is_skipped_when_its_parent_is_not_ordered():
+    rows = []
+    s = gate_session(None, rows)
+    s.answers_unordered.add("t1")
+    for trade_id in ("t1", "t1/giveback"):
+        s.record(dict(action="exit", rule="CL01", side="sell", trade_id=trade_id, received=5))
+    s.record(dict(action="exit", rule="CL01", side="sell", trade_id="t2/giveback", received=5))
+    assert [r["kind"] for r in rows] == ["signal"] * 3 + ["paper order"] and rows[3]["trade_id"] == "t2/giveback"
+    rows = []
+    s = gate_session(None, rows)  # nothing unordered: as before, and no trade_id needed
+    s.record(dict(action="exit", rule="CL01", side="sell", received=5))
+    assert [r["kind"] for r in rows] == ["signal", "paper order"]
 
 
 def test_unreadable_answers_file_is_reported_once_then_nothing(tmp_path):

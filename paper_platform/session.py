@@ -31,12 +31,15 @@ def digest(path):
         return hashlib.file_digest(f, "sha256").hexdigest()
 
 
+CLOSE_NOT_BUILT = "closing by answer is not built; the hold rule in force is the give-back exit"
+
+
 class Session:
     def __init__(
         self, data_root, trade_day, *, message_budget, output_budget, market_key="nymex-ng", on_event=None,
         started=None, execution_plan=None, captured=None, plan_source=None, capture_connection=None,
         replay_capture=False, capture_commit=None, replay_receipt=None, paced_from_ns=None,
-        answers=None, answer_close=False, decider=None,
+        answers=None, answer_close=False, decider=None,  # answer_close is accepted and ignored: closing by answer is not built
     ):
         # A decider (answers.py) is asked at each opening signal of a rule the plan trades; None = no gate.
         self.decider = decider
@@ -45,7 +48,6 @@ class Session:
         self.decider_hash = hashlib.sha256()
         # Answers from outside (see answers.py): with none plugged in (answers=None) nothing below runs.
         self.answers = answers
-        self.answer_close = answer_close
         self.answers_off = set()
         self.answers_seen = set()
         self.answers_taken = self.answers_applied = 0
@@ -179,7 +181,7 @@ class Session:
             ),
         )
         if answers is not None or decider is not None:
-            self.initial["answers"] = dict(on=True, answer_close=answer_close, decider=decider is not None)
+            self.initial["answers"] = dict(on=True, decider=decider is not None)
         (self.folder / "start.json").write_text(json.dumps(self.initial, indent=2), encoding="utf8")
         self.write("status", reason="started")
 
@@ -219,7 +221,7 @@ class Session:
             if not self._ask_decider(signal, e):
                 self.answers_unordered.add(e["trade_id"])
         if self.execution is None:
-            if e["trade_id"] in self.answers_unordered:
+            if self.answers_unordered and self._unordered(e.get("trade_id")):
                 return
             self.write("paper order", **e, order_id=order_id, signal_sequence=sequence,
                        pricing="open", fill_price=None)
@@ -236,6 +238,11 @@ class Session:
                 break
             tag = order_id if instruction["rule"] == e["rule"] else f"{order_id}-{instruction['rule']}"
             self.execution.submit(instruction, tag)
+
+    def _unordered(self, trade_id):
+        # A trade the answers kept from ordering, or a manager's trade (<id>/<manager>) of one.
+        return trade_id in self.answers_unordered or (
+            isinstance(trade_id, str) and trade_id.partition("/")[0] in self.answers_unordered)
 
     def _late(self):
         # The time spent waiting for a decider is not the run's time. With no decider waited_ns is 0 and this is
@@ -414,7 +421,7 @@ class Session:
         try:
             self.write("answer", answer=answer if isinstance(answer, dict) else None, tape_received_ns=tape_ns,
                        applied=False, reason=text)
-        except TypeError:
+        except Exception:  # an answer the journal cannot hold (a TypeError, a RecursionError on deep nesting)
             self.write("answer", answer=None, tape_received_ns=tape_ns, applied=False, reason=text)
 
     def _ask_decider(self, signal, e):
@@ -431,10 +438,14 @@ class Session:
             failure = None
         except Exception as error:
             given, failure = None, f"the decider raised {type(error).__name__}"
+        if failure is None:
+            try:
+                failure = validate_decision(given, sequence)
+            except Exception as error:
+                # Nothing the check raises leaves record: the answer is "none" and no order goes.
+                failure = f"the decider's answer could not be checked: {type(error).__name__}"
         latency = time.monotonic_ns() - started  # wall time; recorded, and taken out of the run's clock (_late)
         self.waited_ns += latency
-        if failure is None:
-            failure = validate_decision(given, sequence)
         if failure is not None:
             action = "none"
             fields = dict(answer=given if isinstance(given, dict) else None, reason=failure)
@@ -472,9 +483,7 @@ class Session:
         if answer["action"] in ("take", "skip"):
             return "take and skip answer a question put to the decider; they are not taken from a file"
         if answer["action"] == "close":
-            if not self.answer_close:
-                return ("the hold rule in force is the give-back exit; closing by answer is not switched on")
-            return self._close_refusal(answer)[0]
+            return CLOSE_NOT_BUILT
         rule = answer["rule"]
         if rule not in self.rules:
             return "unknown rule"
@@ -484,39 +493,16 @@ class Session:
             return "the rule is already " + ("off" if rule in self.answers_off else "on")
         return None
 
-    def _close_refusal(self, answer):
-        """(reason or None, the venue's rule, held contracts). A close answer closes the paper trade only."""
-        if self.execution is None:
-            return "the trade holds no paper contract", None, 0
-        trade = answer["trade_id"]
-        for rule, venue in self.execution.venues.items():
-            if answer.get("rule", rule) == rule and venue.inventory.get(trade):
-                if self.engine.last is None or self.engine.last["settlement"]:
-                    return "inside the settle window", None, 0
-                if venue.active_orders.get(trade):
-                    return "an order for this trade is still working", None, 0
-                return None, rule, venue.inventory[trade]
-        return "the trade holds no paper contract", None, 0
-
     def _apply_answer(self, answer, row):
         if answer["action"] == "rule_off":
             self.answers_off.add(answer["rule"])
         elif answer["action"] == "rule_on":
             self.answers_off.discard(answer["rule"])
-        else:
-            # Closes the paper position only, through the matcher, on the last quote the session knows. The
-            # engine is not touched: the rule's research idea lives on and its own close is journaled as ever.
-            # No `signal` row is written, so nothing reads this as the rule's own close.
-            _, rule, held = self._close_refusal(answer)
-            event = self.engine.event(rule, "close", "answer " + answer["id"], self.engine.last, answer["trade_id"],
-                                      side="buy" if held > 0 else "sell", trade_data=True, answer_id=answer["id"],
-                                      answer_sequence=row["sequence"])
-            self.execution.submit(event, f"{self.run}-answer-{row['sequence']}")
 
     def answers_receipt(self):
         if self.answers is None and self.decider is None:
             return {"on": False}
-        return dict(on=True, source=self.answers is not None, answer_close=self.answer_close,
+        return dict(on=True, source=self.answers is not None,
                     taken=self.answers_taken, applied=self.answers_applied,
                     not_applied=self.answers_taken - self.answers_applied,
                     waiting_at_stop=self.answers.waiting() if self.answers is not None else 0,

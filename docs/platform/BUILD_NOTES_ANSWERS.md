@@ -4,3 +4,4 @@
 2026-11-24 piece 2b done: take/skip, the gate in Session.record, MailboxDecider, --decider-mailbox in trial.py, README. Not run on tape.
 2026-11-24 review fixes 1, 2, 5 (86ecd21): a bad answer never stops a run; a close by answer closes the paper trade only (no engine change, no signal row). Not run on tape.
 2026-11-24 review fixes 3, 4, 6, 7, 8: decider wait taken out of the run's clock (waited_ns), event precheck counts question and answer rows, used mailbox folder refused, README words, 16 checks in test_answers.py. Not run on tape.
+2026-11-24 second review fixes 1 to 8: _malformed key always malformed, by required, gate check inside the try, per-line parse catch, manager rows follow their parent, closing by answer not built (no --answer-close), budget words, checks. Not run on tape.

@@ -39,7 +39,10 @@ def validate(answer):
     if not isinstance(answer, dict):
         return "an answer is one JSON object"
     if "_malformed" in answer:
-        return answer["_malformed"]
+        # The key itself marks the answer: whatever its value, null included, the answer is malformed.
+        value = answer["_malformed"]
+        text = "" if value is None else str(value)
+        return text if text.strip() else "malformed"
     if answer.keys() - KEYS:
         return "unknown field: " + ", ".join(sorted(answer.keys() - KEYS))
     decision = answer.get("action") in ("take", "skip")
@@ -189,20 +192,25 @@ class FileAnswers:
             if not raw.strip():
                 continue
             try:
-                text = raw.decode("utf8")
-            except UnicodeDecodeError:
-                taken.append({"_malformed": f"line {self.lines} is not UTF-8", "line": raw.decode("utf8", "replace")})
-                continue
-            try:
-                answer = json.loads(text)
-            except ValueError as error:
-                taken.append({"_malformed": f"line {self.lines} is not JSON: {error}", "line": text})
-                continue
-            if not isinstance(answer, dict):
-                taken.append({"_malformed": f"line {self.lines} is not one JSON object", "line": text})
-                continue
-            taken.append(answer)
+                taken.append(self._parse(raw))
+            except Exception as error:
+                # Whatever one line raises (a RecursionError on a deeply nested one, say) costs only that line.
+                taken.append({"_malformed": f"line {self.lines} could not be read: {type(error).__name__}",
+                              "line": raw.decode("utf8", "replace")})
         return taken
+
+    def _parse(self, raw):
+        try:
+            text = raw.decode("utf8")
+        except UnicodeDecodeError:
+            return {"_malformed": f"line {self.lines} is not UTF-8", "line": raw.decode("utf8", "replace")}
+        try:
+            answer = json.loads(text)
+        except ValueError as error:
+            return {"_malformed": f"line {self.lines} is not JSON: {error}", "line": text}
+        if not isinstance(answer, dict):
+            return {"_malformed": f"line {self.lines} is not one JSON object", "line": text}
+        return answer
 
     def waiting(self):
         return 0

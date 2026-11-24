@@ -16,8 +16,7 @@ With `--answers <file>` the trial takes in answers from outside (answers.py). Su
 the trial and is an input like the plan: every line is one answer and carries `not_before_tape_ns`, the tape
 time before which it must not be taken (a file without it is refused). The trial hands an answer over at the
 first step whose message is at or after that time, in the order of the file, and the session journals it as a
-row of kind `answer`. `--answer-close` allows a `close` answer to close a trade; without it a close answer is
-journaled and not applied. Without `--answers` nothing here changes.
+row of kind `answer`. A `close` answer is always journaled and not applied (closing by answer is not built). Without `--answers` nothing here changes.
 
 With `--decider-mailbox <folder>` (and `--decider-timeout-s N`, default 600) a decider is asked at each opening
 signal of a rule the plan trades: the session journals a `question` row, writes `<folder>/q-<sequence>/question.json`,
@@ -159,8 +158,6 @@ def main():
     parser.add_argument("--minutes", type=float, required=True, help="minutes of tape in the stretch")
     parser.add_argument("--answers", type=Path,
                         help="a file of answers written before the trial, each with not_before_tape_ns")
-    parser.add_argument("--answer-close", action="store_true",
-                        help="let a close answer close a trade (the hold rule in force is the give-back exit)")
     parser.add_argument("--decider-mailbox", type=Path,
                         help="a folder through which a decider answers take or skip at each opening signal")
     parser.add_argument("--decider-timeout-s", type=float, default=600)
@@ -168,8 +165,6 @@ def main():
     args = parser.parse_args()
     if args.from_minute < 0 or args.minutes <= 0:
         parser.error("the stretch begins at or after the open and holds a positive number of minutes")
-    if args.answer_close and not args.answers:
-        parser.error("--answer-close needs --answers")
     if args.decider_timeout_s <= 0:
         parser.error("the decider's timeout is a positive number of seconds")
     if args.decider_mailbox:
@@ -195,7 +190,6 @@ def main():
                           market_key=args.market, execution_plan=plan, plan_source=str(args.plan),
                           paced_from_ns=begin if args.from_minute else None,
                           answers=TimedAnswers(args.answers) if args.answers else None,
-                          answer_close=args.answer_close,
                           decider=MailboxDecider(args.decider_mailbox, args.decider_timeout_s)
                           if args.decider_mailbox else None)
         try:
