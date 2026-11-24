@@ -226,7 +226,8 @@ def main():
         p.error(reason)
 
     url = os.environ.get("PAPER_RELAY_URL", "").rstrip("/")
-    if urlsplit(url).scheme != "https" or not urlsplit(url).hostname or urlsplit(url).username:
+    if (urlsplit(url).scheme != "https" or not urlsplit(url).hostname or "@" in urlsplit(url).netloc
+            or urlsplit(url).query or urlsplit(url).fragment):
         refuse("Render must use an HTTPS URL")
     for key in ("PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY", "PAPER_RELAY_TOKEN"):
         if not os.environ.get(key):

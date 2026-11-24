@@ -21,7 +21,8 @@ from .run_clock import LIMIT_SECONDS, run_start_ns
 def launch(module, arguments, credentials):
     env = os.environ.copy()
     for key in ("DATABENTO_API_KEY", "PAPER_CAPTURE_KEY", "PAPER_RELAY_TOKEN",
-                "PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY", "MARKETS_DATA_TOKEN"):
+                "PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY", "MARKETS_DATA_TOKEN",
+                "ANTHROPIC_API_KEY", "PAPER_VIEW_PASSWORD", "SSH_AUTH_SOCK"):
         if key not in credentials:
             env.pop(key, None)
     return subprocess.Popen([sys.executable, "-m", "paper_platform." + module, *map(str, arguments)], env=env)
@@ -77,7 +78,7 @@ def main():
         bound_plan = Path(temporary) / "live-ng-plan.json"
         try:
             backup = launch("capture_backup", ["follow", *common, "--checkout", args.checkout, "--source", "live"],
-                            {"PAPER_CAPTURE_KEY"})
+                            {"PAPER_CAPTURE_KEY", "SSH_AUTH_SOCK"})
             recorder = launch("record_mbo", [*common, "--source", "live", "--message-budget", args.message_budget,
                                               "--ready-file", ready, "--live-contract-file", contract_file,
                                               "--greg-go"], notices | {"DATABENTO_API_KEY"})
@@ -94,7 +95,7 @@ def main():
             paper = launch("run", [*common, "--market", "nymex-ng", "--message-budget", args.message_budget,
                                    "--event-budget", args.event_budget, "--execution-plan", bound_plan, "--capture", db,
                                    "--capture-connection", connection, "--greg-go"],
-                           notices | {"PAPER_RELAY_TOKEN", "MARKETS_DATA_TOKEN"})
+                           notices | {"PAPER_RELAY_TOKEN", "MARKETS_DATA_TOKEN", "SSH_AUTH_SOCK"})
             while paper.poll() is None and recorder.poll() is None and backup.poll() is None:
                 if stopping.wait(0.2) or time.monotonic() >= deadline:
                     break

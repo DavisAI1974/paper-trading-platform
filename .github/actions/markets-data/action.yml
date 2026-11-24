@@ -41,7 +41,7 @@ runs:
         # A second checkout in the job can use the same agent.
         if [[ -z "${SSH_AUTH_SOCK:-}" ]]; then
           eval "$(env -u DEPLOY_KEY ssh-agent -s)" > /dev/null
-          ssh-add -q - <<< "$DEPLOY_KEY"
+          printf '%s\n' "$DEPLOY_KEY" | ssh-add -q -
           # GitHub's published public host key, from https://api.github.com/meta.
           known_hosts="$RUNNER_TEMP/markets-data-known-hosts"
           echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > "$known_hosts"

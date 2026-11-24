@@ -78,7 +78,7 @@ def main():
 
     url = os.environ["PAPER_RELAY_URL"].rstrip("/")
     target = urlsplit(url)
-    if target.scheme != "https" or not target.hostname or target.username or target.query or target.fragment:
+    if target.scheme != "https" or not target.hostname or "@" in target.netloc or target.query or target.fragment:
         parser.error("configure the Render HTTPS origin")
     with requests.Session() as http:
         http.headers["Authorization"] = "Bearer " + os.environ["PAPER_RELAY_TOKEN"]

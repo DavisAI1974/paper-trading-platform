@@ -38,7 +38,6 @@ jobs:
       SOURCE: live
       EVENT_BUDGET: ${{ inputs.event_budget }}
       DELIVERY_BUDGET: ${{ inputs.message_budget }}
-      PAPER_CAPTURE_KEY: ${{ secrets.PAPER_CAPTURE_KEY }}
     steps:
       - name: Start the 5.75-hour run clock
         run: python3 -c 'import time; print(f"PAPER_RUN_STARTED_NS={time.monotonic_ns()}")' >> "$GITHUB_ENV"
@@ -66,9 +65,12 @@ jobs:
       - run: python -m pip install -r paper_platform/requirements.txt
       - name: Restore the last published capture checkpoint
         id: restore_capture
+        env:
+          PAPER_CAPTURE_KEY: ${{ secrets.PAPER_CAPTURE_KEY }}
         run: python -m paper_platform.capture_backup restore --data purchased-inputs --checkout checkpoint --trade-day "$TRADE_DAY" --source "$SOURCE"
       - name: Run the recorder and paper session together
         env:
+          PAPER_CAPTURE_KEY: ${{ secrets.PAPER_CAPTURE_KEY }}
           EXECUTION_PLAN: ${{ inputs.execution_plan }}
           PAPER_RELAY_URL: ${{ vars.PAPER_RELAY_URL }}
           PAPER_RELAY_TOKEN: ${{ secrets.PAPER_RELAY_TOKEN }}
@@ -80,4 +82,6 @@ jobs:
           --trade-day "$TRADE_DAY" --message-budget "$DELIVERY_BUDGET" --event-budget "$EVENT_BUDGET"
       - name: Persist the final committed deliveries
         if: ${{ always() && steps.restore_capture.outcome == 'success' }}
+        env:
+          PAPER_CAPTURE_KEY: ${{ secrets.PAPER_CAPTURE_KEY }}
         run: python -m paper_platform.capture_backup publish --data purchased-inputs --checkout checkpoint --trade-day "$TRADE_DAY" --source "$SOURCE"
