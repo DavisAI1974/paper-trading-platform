@@ -224,9 +224,7 @@ class PaperExecution:
         if raw["action"] == "R":
             delta(BookAction.CLEAR, None)
         elif old != new:
-            # ROOT sends an order whose size is raised to the back of its line. NautilusTrader's update keeps
-            # an order's place, so a raise reaches the matcher as a delete and an add, as a price change does.
-            replaced = old and new and (old[0] != new[0] or old[2:] != new[2:] or new[1] > old[1])
+            replaced = old and new and (old[0] != new[0] or old[2:] != new[2:])
             if old and (not new or replaced):
                 delta(BookAction.DELETE, old)
             if new:
