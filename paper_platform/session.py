@@ -194,8 +194,9 @@ class Session:
                        pricing="open", fill_price=None)
             return
         for instruction in self.execution.instructions(dict(e, signal_sequence=sequence)):
-            if self.state == "active" and (self.events >= self.output_budget
-                                           or time.monotonic() >= self.deadline):
+            # Only the event budget cuts a decision's orders short. The clock is checked once the decision
+            # is whole, so a live run and its replay send the same orders for the same message.
+            if self.state == "active" and self.events >= self.output_budget:
                 break
             tag = order_id if instruction["rule"] == e["rule"] else f"{order_id}-{instruction['rule']}"
             self.execution.submit(instruction, tag)

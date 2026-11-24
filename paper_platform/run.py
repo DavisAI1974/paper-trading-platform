@@ -237,6 +237,8 @@ def main():
     except ValueError as error:
         refuse(str(error))
     s = pub = journal = None
+    # The phone is told whether a stop is a live run's or a replay's.
+    activity = "paper run" if args.capture else "paper replay"
     finished = threading.Event()
     alert_sent = threading.Event()
     why = "failure"
@@ -251,8 +253,13 @@ def main():
                 raise ValueError("receipt belongs to a different paper run")
             execution_plan = receipt["execution_plan"]
             plan_source = "receipt for " + receipt["run"]
-            args.message_budget = min(args.message_budget, receipt["constants"]["message_budget"])
-            args.event_budget = min(args.event_budget, receipt["constants"]["event_budget"])
+            # A replay runs on the live run's own budgets. A smaller one would stop it short of the live
+            # run's last message with "budget reached".
+            if (args.message_budget < receipt["constants"]["message_budget"]
+                    or args.event_budget < receipt["constants"]["event_budget"]):
+                raise ValueError("receipt replay needs at least the original run's budgets")
+            args.message_budget = receipt["constants"]["message_budget"]
+            args.event_budget = receipt["constants"]["event_budget"]
         else:
             execution_plan, plan_source = read_execution_plan(args)
         s = Session(
@@ -310,7 +317,7 @@ def main():
         def send_stop_notice():
             s.stopping.wait()
             try:
-                notify(s.stop_notice(), s.run)
+                notify(s.stop_notice(), s.run, activity=activity)
                 alert_sent.set()
             except (requests.RequestException, RuntimeError) as error:
                 # The finalizer retries if Pushover did not acknowledge delivery.
@@ -384,7 +391,7 @@ def main():
             notice_worker.join()
         try:
             if not alert_sent.is_set():
-                notify(s.stop_notice() if s is not None else why, s.run if s else "preflight")
+                notify(s.stop_notice() if s is not None else why, s.run if s else "preflight", activity=activity)
         except Exception:
             errors.append("phone")
         if journal is not None:

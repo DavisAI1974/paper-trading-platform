@@ -79,14 +79,12 @@ def compare(live_folder, replay_folder):
 
     # Consume both journals even after a difference so a truncated journal can
     # never produce a decision comparison reported as complete.
-    first_difference = None
+    differences = []
     live_count = replay_count = 0
     pairs = zip_longest(decisions(live_folder, live), decisions(replay_folder, replay))
     for ordinal, (original, reproduced) in enumerate(pairs, start=1):
         live_count += original is not None
         replay_count += reproduced is not None
-        if first_difference is not None:
-            continue
         if original is not None and reproduced is not None and original[1] == reproduced[1]:
             continue
         fields = []
@@ -100,7 +98,9 @@ def compare(live_folder, replay_folder):
             left, right = original[1], reproduced[1]
             fields = sorted(key for key in left.keys() | right.keys()
                             if key not in left or key not in right or left[key] != right[key])
-        first_difference = dict(decision=ordinal, locations=locations, differing_fields=fields)
+        # Every difference is kept, each on its own. The two journals are paired by position, so one
+        # row more in either journal makes every later pair differ.
+        differences.append(dict(decision=ordinal, locations=locations, differing_fields=fields))
 
     window_differences = [
         key for key in ("delivered", "first_live_decision_cursor", "last_source", "status", "capture_end")
@@ -133,7 +133,8 @@ def compare(live_folder, replay_folder):
                 first_execution_difference=first_execution_difference,
                 frame_fingerprints_available=live_frames is not None and replay_frames is not None,
                 eligible_live_input=live["first_live_decision_cursor"] is not None,
-                live_decisions=live_count, replay_decisions=replay_count, first_difference=first_difference)
+                live_decisions=live_count, replay_decisions=replay_count,
+                first_difference=differences[0] if differences else None, differences=differences)
 
 
 def main():
@@ -142,7 +143,10 @@ def main():
     parser.add_argument("replay", type=Path)
     args = parser.parse_args()
     report = compare(args.live, args.replay)
+    differences = report.pop("differences")
     print(json.dumps(report, indent=2))
+    for difference in differences:
+        print(json.dumps(difference, separators=(",", ":")))
     if (report["window_differences"] or report["first_difference"] is not None
             or report["first_execution_difference"] is not None):
         raise SystemExit("The run windows, strategy decisions or paper execution events differ.")
