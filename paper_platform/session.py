@@ -33,7 +33,7 @@ def digest(path):
 class Session:
     def __init__(
         self, data_root, trade_day, *, message_budget, output_budget, market_key="nymex-ng", on_event=None,
-        started=None, execution_plan=None, captured=None,
+        started=None, execution_plan=None, captured=None, plan_source=None,
     ):
         self.started = time.monotonic() if started is None else started
         self.market = replay_market(market_key)
@@ -98,6 +98,8 @@ class Session:
             order_book={"engine": "NautilusTrader", "version": version("nautilus_trader"), "type": "L3_MBO"},
             inputs=sources,
             execution_plan=execution_plan,
+            execution_plan_source=plan_source,
+            execution_plan_sha256=hashlib.sha256(json.dumps(execution_plan, sort_keys=True, separators=(",", ":")).encode()).hexdigest() if execution_plan is not None else None,
             manifest_sha256=None if self.captured else digest(folder / "MANIFEST.json"),
             data_commit=git(self.data_root, "rev-parse", "HEAD"),
             rule_commits=self.rule_commits,
