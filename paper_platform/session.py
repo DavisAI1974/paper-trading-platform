@@ -141,7 +141,10 @@ class Session:
             data_commit=git(self.data_root, "rev-parse", "HEAD"),
             calculation_files={path: digest(code / path) for path in (
                 "paper_platform/inputs.py", "crypto_ng/tick.py", "root/calcs/quote_runs.py",
-                "root/calcs/leg_peaks.py", "root/calendar.py", "root/book.py")},
+                "root/calcs/leg_peaks.py", "root/calendar.py", "root/book.py",
+                # The code that decides for the rules: a CL rule's file holds its words, not its conditions.
+                "paper_platform/claude_rules.py", "paper_platform/unsided_print_rules.py",
+                "paper_platform/engine.py", "paper_platform/rulebook.py", "paper_platform/cx_observations.py")},
             rule_commits=self.rule_commits,
             rule_files={k: digest(RULES / (k + ".json")) for k in self.rules},
             causal_check=causal_check,
