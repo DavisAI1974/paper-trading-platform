@@ -1,9 +1,10 @@
-# Paper trading on the tastytrade sandbox: the running list
+# Paper trading on the tastytrade sandbox: the list of gaps and misses to take care of
 
 Started 2026-11-24 on Greg's word ("Start a list and save as md file in paper trade repo so it can be added to and
-is accessible"). It holds what has been seen while building and running the paper runner and what is to be looked
-at when the rules are rewritten. It is a list, not a record: the records are in `DavisAI1974/markets-data`, branch
-`ccr-349e2ffe-07p8od`, folder `tasks/family-research-20261022/research-union-current/` (named below as DATA).
+is accessible"; "Meaning start list of gaps and misses to take care of"). Every line is something that is missing,
+wrong, late, unproven or undecided in the paper runner, its rules or its feed, and is to be taken care of. It is a
+list, not a record: the records are in `DavisAI1974/markets-data`, branch `ccr-349e2ffe-07p8od`, folder
+`tasks/family-research-20261022/research-union-current/` (named below as DATA).
 
 **How to add to it.** Add a line at the end of the section it belongs to, with the next number, the date and who
 (Greg, Claude, Codex). Say what was seen and where the record is. Do not rewrite another line; when a line is
@@ -81,5 +82,5 @@ line here is a result.
 
 ## D. Runs
 
-(Each live run is added here when it has been made: the date, how long, with or without orders, how many orders,
-where its record is, and what was seen.)
+(Each live run is added here when it has been made: the date, how long, how many orders, where its record is, and
+the gaps and misses it showed. Each of those also gets its own line in section A, B or C.)
