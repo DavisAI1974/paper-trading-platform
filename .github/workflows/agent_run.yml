@@ -70,4 +70,4 @@ jobs:
             attach_args+=(--attach "$path")
           done
           run_id=$(python -c 'import uuid; print(uuid.uuid4().hex)')
-          python -m paper_platform.agent_launcher --data agent-output --run "$run_id" --brief "$BRIEF" "${attach_args[@]}" --model "$MODEL" --output-reserve "$OUTPUT_RESERVE" --token-budget "$TOKEN_BUDGET" --seconds-budget "$SECONDS_BUDGET" --greg-go
+          exec python -m paper_platform.agent_launcher --data agent-output --run "$run_id" --brief "$BRIEF" "${attach_args[@]}" --model "$MODEL" --output-reserve "$OUTPUT_RESERVE" --token-budget "$TOKEN_BUDGET" --seconds-budget "$SECONDS_BUDGET" --greg-go

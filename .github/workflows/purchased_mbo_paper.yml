@@ -140,4 +140,4 @@ jobs:
           if [[ -n "$ORIGINAL_RUN" ]]; then
             plan_args=(--replay-receipt "$GITHUB_WORKSPACE/original-journal/paper-trading/$ORIGINAL_RUN/receipt.json")
           fi
-          python -B -m paper_platform.run "${capture_args[@]}" "${plan_args[@]}" --greg-go --data "$GITHUB_WORKSPACE/purchased-inputs" --market "$MARKET" --trade-day "$TRADE_DAY" --message-budget "$MESSAGE_BUDGET" --event-budget "$EVENT_BUDGET"
+          exec python -B -m paper_platform.run "${capture_args[@]}" "${plan_args[@]}" --greg-go --data "$GITHUB_WORKSPACE/purchased-inputs" --market "$MARKET" --trade-day "$TRADE_DAY" --message-budget "$MESSAGE_BUDGET" --event-budget "$EVENT_BUDGET"

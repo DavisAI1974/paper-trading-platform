@@ -212,16 +212,26 @@ def main():
         p.error("a stored capture has no active recorder connection")
     if not args.greg_go:
         p.error("Greg must start this run")
-    url = os.environ["PAPER_RELAY_URL"].rstrip("/")
+
+    def refuse(reason):
+        # A start Greg made and the runner refuses is a failure. The phone hears of it when both
+        # Pushover credentials are present; without them the notice cannot go and the refusal stands.
+        try:
+            notify("refused before startup: " + reason, "preflight")
+        except Exception:
+            pass
+        p.error(reason)
+
+    url = os.environ.get("PAPER_RELAY_URL", "").rstrip("/")
     if urlsplit(url).scheme != "https" or not urlsplit(url).hostname or urlsplit(url).username:
-        p.error("Render must use an HTTPS URL")
+        refuse("Render must use an HTTPS URL")
     for key in ("PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY", "PAPER_RELAY_TOKEN"):
         if not os.environ.get(key):
-            p.error("required run credential missing: " + key)
+            refuse("required run credential missing: " + key)
     try:
         push_url = writer_remote(args.data)
     except ValueError as error:
-        p.error(str(error))
+        refuse(str(error))
     s = pub = journal = None
     finished = threading.Event()
     alert_sent = threading.Event()
@@ -298,8 +308,9 @@ def main():
             try:
                 notify(s.stop_notice(), s.run)
                 alert_sent.set()
-            except (requests.RequestException, RuntimeError):
-                pass  # The finalizer retries if Pushover did not acknowledge delivery.
+            except (requests.RequestException, RuntimeError) as error:
+                # The finalizer retries if Pushover did not acknowledge delivery.
+                print("phone notice attempt failed: " + type(error).__name__, flush=True)
 
         notice_worker = threading.Thread(target=send_stop_notice, daemon=True)
         notice_worker.start()

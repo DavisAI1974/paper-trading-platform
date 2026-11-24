@@ -73,7 +73,8 @@ jobs:
           wait -n -p finished "$recorder_pid" "$backup_pid"
           result=$?
           if [[ "${finished:-}" != "$recorder_pid" ]]; then
-            kill -TERM "$recorder_pid" 2>/dev/null
+            # The recorder reports SIGUSR1 as a failed checkpoint publication and SIGTERM as a stop.
+            if [[ "${finished:-}" == "$backup_pid" ]]; then kill -USR1 "$recorder_pid" 2>/dev/null; else kill -TERM "$recorder_pid" 2>/dev/null; fi
             wait "$recorder_pid"
             result=1
           fi

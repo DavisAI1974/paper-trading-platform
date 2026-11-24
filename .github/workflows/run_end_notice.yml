@@ -6,6 +6,9 @@ on:
       - Purchased NG MBO paper replay
       - Record NG MBO and persist checkpoints
       - Budgeted agent run
+      - Compare live and replay strategy journals
+      - Verify paper platform on purchased MBO
+      - Restore phone dashboard from a published run
     types: [completed]
 permissions: {}
 jobs:
@@ -22,7 +25,8 @@ jobs:
           RUN_NUMBER: ${{ github.event.workflow_run.run_number }}
           CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         run: |
-          curl --fail --silent --show-error --max-time 5 \
+          : "${PUSHOVER_APP_TOKEN:?PUSHOVER_APP_TOKEN is not set}" "${PUSHOVER_USER_KEY:?PUSHOVER_USER_KEY is not set}"
+          curl --fail --silent --show-error --max-time 5 --retry 3 --retry-delay 2 \
             --form-string "token=$PUSHOVER_APP_TOKEN" \
             --form-string "user=$PUSHOVER_USER_KEY" \
             --form-string "message=NG Actions run $WORKFLOW #$RUN_NUMBER ended: $CONCLUSION" \

@@ -75,7 +75,7 @@ jobs:
           PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
         run: >
-          python -m paper_platform.run_live --greg-go --checkout checkpoint --data purchased-inputs
+          exec python -m paper_platform.run_live --greg-go --checkout checkpoint --data purchased-inputs
           --trade-day "$TRADE_DAY" --message-budget "$DELIVERY_BUDGET" --event-budget "$EVENT_BUDGET"
       - name: Persist the final committed deliveries
         if: ${{ always() && steps.restore_capture.outcome == 'success' }}
