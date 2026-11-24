@@ -328,9 +328,8 @@ class Engine:
             self.p = None
         elif t["trade"]:
             if self.p:
-                # An interrupted observation has ended: "end the observation as interrupted and reset. Resume
-                # with fresh prints" (the CX strategy text). So only a trade still open holds its rule back.
                 active_names = {idea["rule"] for idea in self.open.values()}
+                active_names.update(idea["rule"] for idea in self.unmonitored.values())
                 for rule in self.cx:
                     if rule["role"] == "manager" or rule["id"] in active_names:
                         continue
