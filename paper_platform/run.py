@@ -84,7 +84,13 @@ class Publication:
             raise RuntimeError("markets-data git " + args[0] + " failed")
         return proc.stdout.strip() if read_output else None
 
+    def publish_commit(self):
+        self.command("push", self.push_url, self.commit + ":refs/heads/" + self.branch)
+        self.published_commit = self.commit
+
     def push(self):
+        if self.tree is not None and self.published_commit != self.commit:
+            self.publish_commit()
         s = self.s
         path = s.folder.relative_to(s.data_root).as_posix()
         if self.commit is None:
@@ -107,8 +113,7 @@ class Publication:
             )
             self.tree = tree
         if self.published_commit != self.commit:
-            self.command("push", self.push_url, self.commit + ":refs/heads/" + self.branch)
-            self.published_commit = self.commit
+            self.publish_commit()
         self.last_push = time.monotonic()
 
     def send(self, event):
@@ -256,31 +261,39 @@ def main():
                     except (OSError, sqlite3.Error, RuntimeError):
                         end = dict(connection_id=args.capture_connection, status="capture journal unreadable")
                 if end is not None:
-                    stopped_here = s.stop_capture(end)
-                elif reason := s.due():
-                    stopped_here = s.stop(reason)
-                else:
-                    continue
-                if stopped_here:
-                    try:
-                        notify(s.stop_notice(), s.run)
-                        alert_sent.set()
-                    except (requests.RequestException, RuntimeError):
-                        pass
-                return
+                    s.stop_capture(end)
+                    return
+                if reason := s.due():
+                    s.stop(reason)
+                    return
+
+        def send_stop_notice():
+            s.stopping.wait()
+            try:
+                notify(s.stop_notice(), s.run)
+                alert_sent.set()
+            except (requests.RequestException, RuntimeError):
+                pass  # The finalizer retries if Pushover did not acknowledge delivery.
+
+        notice_worker = threading.Thread(target=send_stop_notice, daemon=True)
+        notice_worker.start()
 
         watcher = threading.Thread(target=guard, daemon=True)
         watcher.start()
 
-        def deliver():
+        def deliver_relay():
             while pending:
-                event = pending[0]
-                pub.send(event)
-                if event["kind"] in ("paper order", "fill"):
-                    pub.push()
+                pub.send(pending[0])
                 pending.popleft()
-            if time.monotonic() - pub.last_push >= 60:
+
+        def deliver():
+            # One market tick can emit a signal, an order and several fills together.
+            # Take their Git snapshot before an earlier signal can block on Render.
+            with s.lock:
+                urgent = any(event["kind"] in ("paper order", "fill") for event in pending)
+            if urgent or time.monotonic() - pub.last_push >= 60:
                 pub.push()
+            deliver_relay()
 
         while s.state == "active":
             if stopped.is_set():
@@ -333,6 +346,8 @@ def main():
                 s.stop(why)
             except Exception:
                 errors.append("close")
+        if "notice_worker" in locals():
+            notice_worker.join()
         try:
             if not alert_sent.is_set():
                 notify(s.stop_notice() if s is not None else why, s.run if s else "preflight")
@@ -340,13 +355,13 @@ def main():
             errors.append("phone")
         if pub is not None:
             try:
-                deliver()
-            except Exception:
-                errors.append("relay")
-            try:
                 pub.push()
             except Exception:
                 errors.append("git")
+            try:
+                deliver_relay()
+            except Exception:
+                errors.append("relay")
         if errors:
             try:
                 notify("failure during final delivery", s.run if s else "preflight")

@@ -48,6 +48,7 @@ class Session:
         if min(message_budget, output_budget) <= 0:
             raise ValueError("set positive message and event budgets")
         self.lock = threading.RLock()
+        self.stopping = threading.Event()
         self.run = uuid4().hex
         self.on_event = on_event
         code = RULES.parents[1]
@@ -283,6 +284,7 @@ class Session:
             if self.state != "active":
                 return
             self.state = reason
+            self.stopping.set()
             try:
                 close_signals = {}
                 for decision in self.engine.stop(reason):

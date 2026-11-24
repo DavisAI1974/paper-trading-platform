@@ -104,7 +104,7 @@
 
 - [ ] **23.** A BUDGET: the moment any budget is reached everything stops and Greg is notified on his phone at once. Holds for agent runs too. DECIDED
 
-  **In progress.** The platform has message, event and wall-clock limits. Phone delivery and Ccode’s agent-run budget handling need evidence.
+  **In progress.** The platform has message, event and wall-clock limits. The runner wakes a Pushover worker when the session enters its stop state so receipt writing and Render delivery can proceed independently. Phone delivery and Ccode’s agent-run budget handling need evidence.
 
 ## WHAT GREG SEES
 
@@ -114,11 +114,11 @@
 
 - [ ] **25.** The same events appended to the git record in markets-data, pushed every minute and at once on every order and fill. DECIDED
 
-  **In progress.** The publisher targets markets-data on orders and each minute. PR 5 also pushes on each fill and retries the same Git commit after a publication failure. Operational evidence is pending.
+  **In progress.** The publisher targets markets-data on orders and each minute. PR 5 snapshots each tick containing orders or fills before delivering its events to Render. A retry pushes the pending commit before capturing any newer journal state. Git and relay delivery are attempted independently at shutdown. Operational evidence is pending.
 
 - [ ] **26.** A phone notice for: a budget stop, a run stop, a failure. The live store and the notice service are named to Greg before anything is set up. OPEN
 
-  **Providers approved.** Greg selected Render for the HTML/htmx dashboard and Pushover for notices. Service setup and receipt of a phone notice remain open.
+  **Providers approved.** Greg selected Render for the HTML/htmx dashboard and Pushover for notices. The repository has the two Pushover secret names configured. Render connection settings and receipt of a phone notice remain open.
 
 - [ ] **27.** Per strategy, a plain list of its trades: time in, time out, both quotes at each end, why it opened, why it closed. No summary number until Greg sets one. SUGGESTED
 
