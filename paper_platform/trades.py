@@ -32,14 +32,27 @@ def trade_rows(db, run, rule, *, trade_id=None, through=None):
           AND json_extract(b.body,'$.action')=CASE json_extract(a.body,'$.action')
                                               WHEN 'exit' THEN 'open' ELSE 'close' END
           AND (? IS NULL OR b.sequence<=?)
+          AND b.sequence=(SELECT MAX(last.sequence) FROM events last WHERE last.run=b.run
+                AND json_extract(last.body,'$.kind')='paper order'
+                AND json_extract(last.body,'$.trade_id')=json_extract(b.body,'$.trade_id')
+                AND json_extract(last.body,'$.action')=json_extract(b.body,'$.action')
+                AND (? IS NULL OR last.sequence<=?))
         WHERE {' AND '.join(where)}
         ORDER BY a.sequence DESC
     """
     rows = []
-    for body, other, observation in db.execute(sql, (through, through, through, through, *params)):
+    for body, other, observation in db.execute(sql, (through, through, through, through, through, through, *params)):
         order = json.loads(body)
         paired = json.loads(other) if other else None
         entry, exit_order = (paired, order) if order["action"] == "exit" else (order, paired)
-        rows.append(dict(trade_id=order["trade_id"], rule=rule, entry=entry, exit=exit_order,
+        fills = [
+            json.loads(item[0]) for item in db.execute(
+                "SELECT body FROM events WHERE run=? AND json_extract(body,'$.trade_id')=? "
+                "AND json_extract(body,'$.rule')=? AND json_extract(body,'$.kind')='fill' "
+                "AND (? IS NULL OR sequence<=?) ORDER BY sequence",
+                (run, order["trade_id"], rule, through, through),
+            )
+        ]
+        rows.append(dict(fills=fills, trade_id=order["trade_id"], rule=rule, entry=entry, exit=exit_order,
                          observation=json.loads(observation) if observation else None))
     return rows

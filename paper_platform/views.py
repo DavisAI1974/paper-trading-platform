@@ -36,18 +36,26 @@ def trade_card(trade, profile):
     entry, exit_order = trade["entry"], trade["exit"]
     fields = [f'<article id="trade-{e(trade["trade_id"])}"><strong>{e(trade["rule"])} · '
               f'{e((entry or exit_order).get("side", ""))}</strong>']
-    fields.append(leg("Entry", entry) if entry else "<p>Entry record unavailable</p>")
+    fields.append(leg("Entry order", entry) if entry else "<p>Entry record unavailable</p>")
     if trade["observation"]:
         fields.append(f"<p>{e(trade['observation']['reason'])}</p>")
     if exit_order is None:
         fields.append("<p>Open · awaiting exit</p>")
     else:
-        label = "Exit"
+        label = "Exit order"
         if exit_order.get("management_only"):
             label = "Manager exit"
         elif exit_order.get("trade_data") is False:
             label = "Administrative close · excluded from trade data"
         fields.append(leg(label, exit_order))
+    if entry and entry.get("pricing") == "native L3":
+        fields.append("<p><b>Paper fills</b></p>")
+        if not trade["fills"]:
+            fields.append("<small>No execution recorded</small>")
+        for fill in trade["fills"]:
+            fields.append(f"<small>{e(fill['action'])} · {e(fill['side'])} {e(fill['quantity'])} @ "
+                          f"{price(fill['fill_price'], profile)} {e(profile['price_unit'])} · "
+                          f"{e(fill['liquidity'])} · {e(fill['received'])} ns</small>")
     return "".join(fields) + "</article>"
 
 
