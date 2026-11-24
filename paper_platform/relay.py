@@ -70,8 +70,8 @@ def relay():
                 run, json_extract(body,'$.rule'), json_extract(body,'$.trade_id'), sequence
             ) WHERE json_extract(body,'$.trade_id') IS NOT NULL;
             CREATE TABLE IF NOT EXISTS sessions(run TEXT PRIMARY KEY, body TEXT NOT NULL, first_ns TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS prints(run TEXT, received INTEGER, price INTEGER,
-                PRIMARY KEY(run, received));
+            CREATE TABLE IF NOT EXISTS tape_prints(run TEXT, position INTEGER, received INTEGER, price INTEGER,
+                PRIMARY KEY(run, position));
         """)
 
     def viewer(authorization: str = Header(default="")):
@@ -139,10 +139,10 @@ def relay():
     @app.post("/prints", dependencies=[Depends(authorize_writer)])
     def traded_prices(batch: PrintBatch):
         # For the price graph only: trades of the tape, each at its own time and its own price. Never a mid.
-        if any(len(sample) != 2 for sample in batch.samples):
-            raise HTTPException(422, "a sample is a tape time and a traded price")
+        if any(len(sample) != 3 for sample in batch.samples):
+            raise HTTPException(422, "a sample is a place on the tape, its receive time and its traded price")
         with connect() as db:
-            db.executemany("INSERT OR IGNORE INTO prints VALUES(?,?,?)",
+            db.executemany("INSERT OR IGNORE INTO tape_prints VALUES(?,?,?,?)",
                            [(batch.run, *sample) for sample in batch.samples])
         return {"stored": len(batch.samples)}
 
@@ -187,26 +187,25 @@ def relay():
 
     @app.get("/api/chart", dependencies=[Depends(viewer)])
     def chart(run: str | None = None, market: str = "nymex-ng", rule: str = "", known: str = "",
-              after_ns: str = "-1", after_seq: int = -1):
+              after_print: int = -1, after_seq: int = -1):
         """The price graph's points since the page last asked: the market's traded prices and this run's paper fills.
-        Times go out in milliseconds, which a browser holds exactly; the cursor stays in nanoseconds as text."""
+        Every trade of the tape is kept at its nanosecond time; the drawing gets milliseconds, which a browser
+        holds exactly, and asks again from the last trade's place on the tape."""
         profiles = markets()
         if market not in profiles or (rule and rule not in profiles[market]["rules"]):
             raise HTTPException(404, "unknown market or rule")
-        if not after_ns.lstrip("-").isdigit():
-            raise HTTPException(400, "invalid graph cursor")
         profile = profiles[market]
         with connect() as db:
             db.execute("BEGIN")
             state = session_state(db, run, market)
             current = state.get("run")
             if current != known:
-                after_ns, after_seq = "-1", -1  # another run than the page holds: from its beginning
+                after_print, after_seq = -1, -1  # another run than the page holds: from its beginning
             samples = fills = []
             if current:
                 samples = db.execute(
-                    "SELECT received,price FROM prints WHERE run=? AND received>? ORDER BY received LIMIT 4000",
-                    (current, int(after_ns))).fetchall()
+                    "SELECT position,received,price FROM tape_prints WHERE run=? AND position>? "
+                    "ORDER BY position LIMIT 4000", (current, after_print)).fetchall()
                 conditions, args = "", [current, after_seq]
                 if rule:
                     conditions, args = " AND json_extract(body,'$.rule')=?", [current, after_seq, rule]
@@ -221,8 +220,8 @@ def relay():
                           fill["side"], fill["action"], fill["rule"], fill.get("trade_data") is not False])
         return dict(run=current or "", status=state.get("status"), scale=profile["price_scale"],
                     unit=profile["price_unit"],
-                    prints=[[received // 1_000_000, traded] for received, traded in samples],
-                    next_ns=str(samples[-1][0]) if samples else after_ns,
+                    prints=[[received // 1_000_000, traded] for _, received, traded in samples],
+                    next_print=samples[-1][0] if samples else after_print,
                     fills=marks, next_seq=fills[-1][0] if fills else after_seq)
 
     def recent_runs(db, market):

@@ -26,7 +26,7 @@ $definition
 <div id="chart-box"><canvas id="chart-canvas" role="img" aria-label="The price the market traded at over tape time, and the prices of this run's paper fills"></canvas><div id="chart-tip" hidden></div></div>
 <small><span class="sw" style="background:#3987e5;margin-left:0"></span>Market traded price<span class="sw" style="background:#d95926"></span>Our paper fills</small>
 <small id="chart-last" role="status"></small>
-<small>Tape time on the Eastern clock, drawn as the tape goes by. Market line: the last trade of each second of tape that has one, at its own price. Our line: each paper fill at its own price. Each line stays level at its last price until the next one, as a price does between trades; only the corners are rounded. No mid price is drawn or computed.</small></section>
+<small>Tape time on the Eastern clock, drawn as the tape goes by. Market line: every trade of the tape, at its own price and its own nanosecond time. Our line: each paper fill at its own price. Each line stays level at its last price until the next one, as a price does between trades; only the corners are rounded. No mid price is drawn or computed.</small></section>
 $trade_section
 <section id="events" data-stream="$stream" aria-label="Trading events">$cards</section>
 <div id="earlier-events">$earlier</div>
@@ -93,7 +93,7 @@ if(!box||!box.dataset.url) return;
 const canvas=document.getElementById('chart-canvas'),ctx=canvas.getContext('2d');
 const tip=document.getElementById('chart-tip'),last=document.getElementById('chart-last');
 const MUTED='#b5c6c5',GRID='#344146',SURFACE='#10191c',MARKET='#3987e5',OURS='#d95926';
-let prints=[],fills=[],run='',nextNs='-1',nextSeq=-1,scale=1,unit='',minutes=5,pointer=null,busy=false,view=null;
+let prints=[],fills=[],run='',nextPrint=-1,nextSeq=-1,scale=1,unit='',minutes=5,pointer=null,busy=false,view=null;
 const clock=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
 const price=v=>(v/scale).toFixed(3);
 function curve(series,x,y,color,right){
@@ -183,12 +183,12 @@ async function poll(){
   busy=true;
   try{
     const url=new URL(box.dataset.url,location.href);
-    url.searchParams.set('known',run);url.searchParams.set('after_ns',nextNs);url.searchParams.set('after_seq',nextSeq);
+    url.searchParams.set('known',run);url.searchParams.set('after_print',nextPrint);url.searchParams.set('after_seq',nextSeq);
     const response=await fetch(url,{headers:{Accept:'application/json'}});
     if(response.ok){
       const data=await response.json();
       if(data.run!==run){prints=[];fills=[];run=data.run}
-      scale=data.scale;unit=data.unit;nextNs=data.next_ns;nextSeq=data.next_seq;
+      scale=data.scale;unit=data.unit;nextPrint=data.next_print;nextSeq=data.next_seq;
       for(const p of data.prints) prints.push(p);
       for(const f of data.fills) fills.push(f);
       draw();

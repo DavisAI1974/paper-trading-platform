@@ -386,22 +386,17 @@ def main():
         page_done = threading.Event()
         prints = []  # every point taken is kept, so a page that restarts can be given the whole line again
         prints_sent = [0]
-        held_print = [None]
 
         def sample_print(message):
-            # For the page's price graph: the price the market traded at. One point for each second of tape
-            # that holds a trade: the last trade of that second, at its own price and its own time. A real
-            # print, never a mid and never an average. It is not journaled (the tape holds every print) and
-            # no rule reads it.
+            # For the page's price graph: the price the market traded at. Every trade of the tape inside the
+            # trade day, at its own price and its own nanosecond receive time, named by its place on the tape.
+            # A real print, never a mid and never an average. It is not journaled (the tape holds every
+            # print) and no rule reads it.
             if message is None or page_feeder is None or not message.get("in_session"):
                 return
             raw = message["raw"]
-            held = held_print[0]
-            if held is not None and raw["ts_recv"] // 1_000_000_000 != held[0] // 1_000_000_000:
-                prints.append(held)
-                held_print[0] = None
             if raw["action"] == "T":
-                held_print[0] = (raw["ts_recv"], raw["price"])
+                prints.append((message["cursor"], raw["ts_recv"], raw["price"]))
 
         def send_prints():
             if pub.page_lost_rows:

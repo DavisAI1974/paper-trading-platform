@@ -256,6 +256,8 @@
 
   **The fill marks are off the graph on Greg's word** ("leave triangles off. They make the screen too messy. This looks better without them"). The two lines stay. To be deployed between runs.
 
+  **The market line draws every trade, on Greg's word** ("Aren't we doing nano tick time and not full seconds?"). The platform decides, orders and fills on the tape's nanosecond times; only the graph's market line had been thinned to the last trade of each second. It now carries every trade of the tape inside the trade day, each at its own price and its own nanosecond receive time, kept by its place on the tape so that two trades of one instant are both there. The drawing itself places points to the millisecond. Not run; to be deployed between runs.
+
   **A page that restarts in the middle of a run, seen in the fourth test and changed in draft, not run** ("It's mossing historical line"). Ccode deployed the page again while the run was going. That emptied the page's store: the runner then sent the journal again one row to a post, which held the graph's points back for minutes, and the market line it had sent before the restart was not sent again at all. Changed in the runner: the rows are sent again 128 to a post, and when the page shows it has lost rows the runner sends it every traded price of the run again. Open point (b) of this item is met by the first of these for a stored-tape run. The page is not to be deployed during a run.
 
 - [ ] **25.** The same events appended to the git record in markets-data, pushed every minute and at once on every order and fill. DECIDED
