@@ -97,11 +97,11 @@ let prints=[],fills=[],run='',nextNs='-1',nextSeq=-1,scale=1,unit='',minutes=5,p
 const clock=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
 const price=v=>(v/scale).toFixed(3);
 function triangle(x,y,up,solid){
-  const r=5,d=up?1:-1;
+  const r=3,d=up?1:-1;
   ctx.beginPath();ctx.moveTo(x,y-d*r);ctx.lineTo(x+r,y+d*r);ctx.lineTo(x-r,y+d*r);ctx.closePath();
-  ctx.lineWidth=4;ctx.strokeStyle=SURFACE;ctx.stroke();
+  ctx.lineWidth=2.5;ctx.strokeStyle=SURFACE;ctx.stroke();
   ctx.fillStyle=solid?INK:SURFACE;ctx.fill();
-  ctx.lineWidth=1.5;ctx.strokeStyle=INK;ctx.stroke();
+  ctx.lineWidth=1;ctx.strokeStyle=INK;ctx.stroke();
 }
 function curve(series,x,y,color){
   // A smooth line through every point that never rises above or dips below the two points it joins.
