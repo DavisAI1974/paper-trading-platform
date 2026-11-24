@@ -11,6 +11,8 @@ Use the marked checklist as the sole running list. Update the text beneath the r
 
 ## Ccode's five items
 
+Ccode can commit and push all changes for his five items to this branch and draft PR. Fetch the latest head and integrate any concurrent commits before pushing.
+
 Start with **17**. Work in the order below, one number at a time. If the current item needs a decision, credential or permission only Greg can supply, record the exact blocker under that number before taking up another. Ccode owns the agents. Frankie and the agents choose placement and size for every strategy.
 
 | Order | Wishlist item | Where it stands and what to do |
@@ -22,6 +24,8 @@ Start with **17**. Work in the order below, one number at a time. If the current
 | 5 | **35 · Claude's independent review** | Codex's implementation is in this draft. Ccode owns arranging the independent Claude review after the build and recording any adjustments against their original wishlist numbers. Greg's current instruction defers checks, validation and tests. Leave the review pending during this build-only pass. |
 
 ## Codex's current item
+
+**27 · Per-strategy trade list.** The phone list and trades API expose first-entry and final-exit fill times, their observed bid and ask, and the order reasons. Partial liquidation stays open until the final filled contract closes. Quote-only rows retain their decision timestamps. This implementation is in draft.
 
 **25 · Git publication.** Each order and fill queues a separate, byte-bounded journal snapshot. The watchdog also schedules minute snapshots while the phone relay is busy. A single worker pushes them in order and includes the final receipt. Operational evidence from markets-data is pending.
 

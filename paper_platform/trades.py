@@ -26,6 +26,46 @@ def _parent_entry(db, run, exit_event):
     return selected
 
 
+def _endpoint(event, reason):
+    if event is None:
+        return None
+    return dict(received=event.get("fill_received_ns", event["received"]), rule=event["rule"],
+                bid=event.get("bid"), ask=event.get("ask"), reason=reason,
+                order_id=event.get("order_id"), fill_id=event.get("fill_id"),
+                quote_reference=event.get("quote_reference") if event["kind"] == "fill"
+                else event.get("expiry_quote_reference", event.get("reference")),
+                trade_data=event.get("trade_data", True))
+
+
+def _timing(row):
+    orders = {order["order_id"]: order for order in row["orders"] if order.get("order_id")}
+    native = (row["fills"] or row["unsubmitted"] or any(order.get("pricing") == "native L3" for order in orders.values())
+              or any(state["rule"] == row["rule"] for state in row["order_states"].values()))
+    if not native:
+        entry = row["entry_signal"] or row["entry"]
+        exit_event = row["exit_signal"] or row["exit"]
+        return dict(basis="decision", time_in=_endpoint(entry, entry.get("reason") if entry else None),
+                    time_out=_endpoint(exit_event, exit_event.get("reason") if exit_event else None),
+                    open_contracts=None)
+
+    entered = exited = None
+    held = 0
+    for fill in row["fills"]:
+        previous = held
+        qty = int(fill["quantity"])
+        held += qty if fill["side"] == "buy" else -qty
+        order = orders.get(fill["order_id"], {})
+        reason = order.get("reason", fill.get("administrative_reason"))
+        if fill["action"] == "open" and entered is None:
+            entered = _endpoint(fill, reason)
+        if held:
+            exited = None
+        elif previous and entered is not None and fill["action"] in ("close", "exit"):
+            exited = _endpoint(fill, reason)
+    return dict(basis="fill", time_in=entered, time_out=exited,
+                open_contracts=abs(held) if entered is not None or not row["fills"] else None)
+
+
 def trade_rows(db, run, rule=None, *, trade_id=None, through=None):
     where = ["run=?", "json_extract(body,'$.trade_id') IS NOT NULL"]
     params = [run]
@@ -49,11 +89,11 @@ def trade_rows(db, run, rule=None, *, trade_id=None, through=None):
         key = event["rule"], event["trade_id"]
         row = rows.get(key)
         if row is None:
-            if kind not in ("signal", "paper order") or action not in ("open", "close", "exit"):
+            if action not in ("open", "close", "exit") or (kind == "order status" and event.get("submitted") is not False):
                 continue
             row = rows[key] = dict(rule=key[0], trade_id=key[1], entry=None, exit=None,
                                    entry_signal=None, exit_signal=None, orders=[], fills=[],
-                                   order_states={}, observation=None)
+                                   order_states={}, unsubmitted=[], observation=None)
         if kind == "paper order":
             row["orders"].append(event)
             if action == "open" and row["entry"] is None:
@@ -70,6 +110,8 @@ def trade_rows(db, run, rule=None, *, trade_id=None, through=None):
         else:
             if kind == "fill":
                 row["fills"].append(event)
+            elif event.get("submitted") is False:
+                row["unsubmitted"].append(event)
             if event.get("order_id"):
                 row["order_states"][event["order_id"]] = event
 
@@ -91,4 +133,7 @@ def trade_rows(db, run, rule=None, *, trade_id=None, through=None):
                     row["order_states"][parent["order_id"]] = json.loads(last[0])
             else:
                 row["entry_signal"] = parent
-    return list(reversed(rows.values()))
+    ordered = list(reversed(rows.values()))
+    for row in ordered:
+        row["timing"] = _timing(row)
+    return ordered

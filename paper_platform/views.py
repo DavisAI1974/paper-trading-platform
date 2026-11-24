@@ -27,7 +27,7 @@ def prices(row, profile):
 
 def trade_card(trade, profile):
     def time_at(event):
-        seconds, nanos = divmod(int(event["received"]), 1_000_000_000)
+        seconds, nanos = divmod(int(event.get("fill_received_ns", event["received"])), 1_000_000_000)
         moment = datetime.fromtimestamp(seconds, ZoneInfo("America/New_York"))
         return f"{moment:%Y-%m-%d %H:%M:%S}.{nanos:09d} {moment:%Z}"
 
@@ -39,20 +39,60 @@ def trade_card(trade, profile):
             detail = (f"<small>{e(order['order_side'])} {e(order['quantity'])} · "
                       f"{e(order['placement'])}{limit}</small>")
         state = trade["order_states"].get(order.get("order_id"))
-        if state:
+        if state and order.get("submitted") is not False:
             status = state.get("order_status", state.get("execution_event", ""))
             remaining = state.get("remaining_quantity")
             detail += f"<small>{e(status)}" + (f" · {e(remaining)} remaining" if remaining is not None else "") + "</small>"
+            explanation = state.get("reason")
+            if explanation and explanation not in (state.get("execution_event"), order.get("reason")):
+                detail += f"<small>{e(explanation)}</small>"
+        reason = order.get("decision_reason", order.get("reason"))
+        if order.get("submitted") is False:
+            outcome = order.get("execution_event") or order.get("reason")
+            if outcome and outcome != reason:
+                detail += f"<small>{e(outcome)}</small>"
         return (f"<p><b>{label}</b> · {e(order['rule'])} · {at}</p>{detail}"
-                f"<small>{prices(order, profile)}</small><p>{e(order['reason'])}</p>")
+                f"<small>{prices(order, profile)}</small><p>{e(reason or 'Reason unavailable')}</p>")
 
     entry = trade["entry"] or trade["entry_signal"]
     exit_event = trade["exit"] or trade["exit_signal"]
-    first = entry or exit_event
+    first = entry or exit_event or (trade["unsubmitted"] or trade["fills"])[0]
     rule, key = trade["rule"], trade["trade_id"]
     side = first.get("side") or first.get("order_side", "")
-    fields = [f'<details id="trade-{e(rule)}-{e(key)}" class="trade-row">'
-              f'<summary>{e(rule)} · {e(side)} · {time_at(first)}</summary><small>Trade · {e(key)}</small>']
+    timing = trade["timing"]
+
+    def endpoint(label, point, pending, instruction):
+        if point:
+            role = f" · {e(point['rule'])}" if point["rule"] != rule else ""
+            admin = " · Administrative close" if point.get("trade_data") is False else ""
+            return (f"<span class='trade-end'><b>{label}{role}{admin}</b> · {time_at(point)}"
+                    f"<small>{prices(point, profile)}</small>"
+                    f"<span>{e(point.get('reason') or 'Reason unavailable')}</span></span>")
+        detail = ""
+        if instruction:
+            reason = instruction.get("decision_reason") or instruction.get("reason")
+            if reason:
+                detail = f"<small>Instruction · {e(reason)}</small>"
+        return f"<span class='trade-end'><b>{label}</b> · {pending}{detail}</span>"
+
+    if timing["basis"] == "fill":
+        enter_label, exit_label = "Time in · First fill", "Time out · Final close fill"
+        no_entry, no_exit = "No entry fill recorded", "No exit fill recorded"
+        held = timing["open_contracts"]
+        if held:
+            no_exit = f"{held} contract{'s' if held != 1 else ''} still open"
+    else:
+        enter_label, exit_label = "Entry decision", "Exit decision"
+        no_entry, no_exit = "Entry unavailable", "No exit decision recorded"
+    attempts = trade["unsubmitted"]
+    entry_intent = entry or next((attempt for attempt in attempts if attempt["action"] == "open"), None)
+    exit_intent = max((event for event in [trade["exit"], trade["exit_signal"], *attempts]
+                       if event and event["action"] in ("close", "exit")),
+                      key=lambda event: event["sequence"], default=None)
+    fields = [f'<details id="trade-{e(rule)}-{e(key)}" class="trade-row"><summary><b>{e(rule)} · {e(side)}</b>',
+              endpoint(enter_label, timing["time_in"], no_entry, entry_intent),
+              endpoint(exit_label, timing["time_out"], no_exit, exit_intent),
+              f'</summary><small>Trade · {e(key)}</small>']
     if entry and (entry["rule"] != rule or entry["kind"] == "signal"):
         label = "Parent entry" if entry["rule"] != rule else "Entry"
         fields.append(leg(label + (" order" if entry["kind"] == "paper order" else " signal"), entry))
@@ -69,6 +109,9 @@ def trade_card(trade, profile):
         else:
             label = "Manager exit" if order.get("management_only") else "Exit order"
         fields.append(leg(label, order))
+    for attempt in attempts:
+        label = "Entry instruction" if attempt["action"] == "open" else "Exit instruction"
+        fields.append(leg(label + " · No order sent", attempt))
     if trade["observation"]:
         fields.append(f"<p>{e(trade['observation']['reason'])}</p>")
     if trade["exit"] is None:
@@ -82,7 +125,8 @@ def trade_card(trade, profile):
         for fill in trade["fills"]:
             fields.append(f"<small>{e(fill['action'])} · {e(fill['side'])} {e(fill['quantity'])} @ "
                           f"{price(fill['fill_price'], profile)} {e(profile['price_unit'])} · "
-                          f"{e(fill['liquidity'])} · {time_at(fill)} · Order {e(fill['order_id'])}</small>")
+                          f"{e(fill['liquidity'])} · {time_at(fill)} · {prices(fill, profile)}"
+                          f" · Order {e(fill['order_id'])}</small>")
     return "".join(fields) + "</details>"
 
 
@@ -119,7 +163,8 @@ def card(event, profile):
     if event.get("entry"):
         fields.append(f"<small>Entry · {prices(event['entry'], profile)} · {e(event['entry']['received'])} ns</small>")
     if "bid" in event or "ask" in event:
-        fields.append(f"<small>At decision · {prices(event, profile)}</small>")
+        label = "At fill" if event["kind"] == "fill" else "At decision"
+        fields.append(f"<small>{label} · {prices(event, profile)}</small>")
     if event.get("print_price") is not None:
         fields.append(
             f"<small>Print {price(event['print_price'], profile)} · Reference print {price(event.get('reference_price'), profile)}"

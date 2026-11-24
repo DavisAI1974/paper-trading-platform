@@ -60,6 +60,8 @@ class RuleVenue:
         self.inventory = defaultdict(int)
         self.reference = None
         self.received = None
+        self.known_received_ns = None
+        self.book_quote = {}
 
     def on_event(self, event):
         order, key, action, administrative_reason = self.orders[str(event.client_order_id)]
@@ -78,7 +80,8 @@ class RuleVenue:
         if isinstance(event, OrderFilled):
             qty = int(event.last_qty)
             self.inventory[key] += qty if event.order_side == OrderSide.BUY else -qty
-            self.emit("fill", **data, fill_id=str(event.trade_id), quantity=qty,
+            self.emit("fill", **data, **self.book_quote, fill_received_ns=self.known_received_ns,
+                      fill_id=str(event.trade_id), quantity=qty,
                       fill_price=event.last_px.raw // DBN_TO_NATIVE,
                       side="buy" if event.order_side == OrderSide.BUY else "sell",
                       liquidity=liquidity_side_to_str(event.liquidity_side))
@@ -93,10 +96,12 @@ class RuleVenue:
         offset = placement["offset_ticks"]
         key, action = event["trade_id"], event["action"]
         self.reference, self.received = event["reference"], event["received"]
+        self.known_received_ns = event.get("known_received_ns", self.received)
         self.clock.set_time(self.received)
         if action != "open":
             cancellation_error = None
-            for identifier in sorted(self.active_orders.get(key, ())):
+            working = sorted(self.active_orders.get(key, ()))
+            for identifier in working:
                 try:
                     self.engine.cancel_order(self.orders[identifier][0])
                 except Exception as error:
@@ -111,9 +116,13 @@ class RuleVenue:
             quantity = abs(held)
             if quantity and not executable:
                 self.emit("order status", **event, order_id=order_id, remaining_contracts=held,
+                          pricing="native L3", submitted=False,
                           execution_event="liquidation unavailable after feed interruption")
                 return
             if not quantity:
+                if working:
+                    self.emit("order status", **event, order_id=order_id, remaining_contracts=0,
+                              pricing="native L3", submitted=False, execution_event="no filled contracts to close")
                 return
             side = OrderSide.SELL if held > 0 else OrderSide.BUY
         else:
@@ -128,8 +137,8 @@ class RuleVenue:
             field = "bid" if buy == same_side else "ask"
             quote = event[field]
             if quote is None:
-                self.emit("order status", rule=self.rule, trade_id=key, order_id=order_id, action=action,
-                          received=self.received, reference=self.reference, reason=f"No {field} for {style} order")
+                self.emit("order status", **dict(event, reason=f"No {field} for {style} order"),
+                          decision_reason=event["reason"], order_id=order_id, pricing="native L3", submitted=False)
                 return
             tick_raw, remainder = divmod(self.instrument.price_increment.raw, DBN_TO_NATIVE)
             if remainder or tick_raw <= 0:
@@ -231,8 +240,14 @@ class PaperExecution:
             aggressor = AggressorSide.BUYER if raw["side"] == "B" else AggressorSide.SELLER
             trade = TradeTick(iid, price(raw["price"]), Quantity.from_int(raw["size"]), aggressor,
                               TradeId(str(msg["cursor"])), stamp, received)
+        reference = (msg["source_sha256"], msg["record_index"])
+        book_quote = dict(bid=msg["best_bid"], ask=msg["best_ask"], quote_reference=reference, quote_received_ns=received)
         for venue in self.venues.values():
-            venue.reference = (msg["source_sha256"], msg["record_index"])
+            # These are the quotes on the observed source book, including when a
+            # resting paper order fills on a later message than its entry decision.
+            venue.book_quote = book_quote
+            venue.known_received_ns = received
+            venue.reference = reference
             venue.received = received
             venue.clock.set_time(received)
             for update in updates:

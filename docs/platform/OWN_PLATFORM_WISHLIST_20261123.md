@@ -126,7 +126,7 @@
 
 - [ ] **27.** Per strategy, a plain list of its trades: time in, time out, both quotes at each end, why it opened, why it closed. No summary number until Greg sets one. SUGGESTED
 
-  **Built in draft.** PR 5 pairs entry and exit orders by trade ID with time, quotes, reasons and individual partial fills. Review and merge are pending.
+  **Built in draft.** Each strategy row shows the first entry fill and the close fill that returns that trade to zero contracts, with Eastern tape time, both observed MBO quotes and the reason from the corresponding order. Partial exits leave the trade open. Signal-only trades show decision times and quotes. Individual fills, administrative closes and unsubmitted instructions remain visible. Older fills without recorded quotes show those quotes as unavailable. Review and merge are pending.
 
 ## THE RECORD
 
