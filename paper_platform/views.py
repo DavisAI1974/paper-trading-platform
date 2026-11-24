@@ -30,23 +30,36 @@ def trade_card(trade, profile):
         seconds, nanos = divmod(int(order["received"]), 1_000_000_000)
         moment = datetime.fromtimestamp(seconds, ZoneInfo("America/New_York"))
         at = f"{moment:%Y-%m-%d %H:%M:%S}.{nanos:09d} {moment:%Z}"
-        return (f"<p><b>{label}</b> · {e(order['rule'])} · {at}</p>"
+        detail = ""
+        if order.get("placement"):
+            limit = (" @ " + price(order["limit_price"], profile)) if order.get("limit_price") is not None else ""
+            detail = (f"<small>{e(order['order_side'])} {e(order['quantity'])} · "
+                      f"{e(order['placement'])}{limit}</small>")
+        state = trade["order_states"].get(order.get("order_id"))
+        if state:
+            status = state.get("order_status", state.get("execution_event", ""))
+            remaining = state.get("remaining_quantity")
+            detail += f"<small>{e(status)}" + (f" · {e(remaining)} remaining" if remaining is not None else "") + "</small>"
+        return (f"<p><b>{label}</b> · {e(order['rule'])} · {at}</p>{detail}"
                 f"<small>{prices(order, profile)}</small><p>{e(order['reason'])}</p>")
 
     entry, exit_order = trade["entry"], trade["exit"]
     fields = [f'<article id="trade-{e(trade["trade_id"])}"><strong>{e(trade["rule"])} · '
               f'{e((entry or exit_order).get("side", ""))}</strong>']
     fields.append(leg("Entry order", entry) if entry else "<p>Entry record unavailable</p>")
+    if entry and entry.get("entry_rule"):
+        fields.append(f"<small>Entry signal from {e(entry['entry_rule'])} · "
+                      f"{e(entry.get('source_trade_id', ''))}</small>")
     if trade["observation"]:
         fields.append(f"<p>{e(trade['observation']['reason'])}</p>")
     if exit_order is None:
-        fields.append("<p>Open · awaiting exit</p>")
+        fields.append("<p>No exit order recorded</p>")
     else:
         label = "Exit order"
-        if exit_order.get("management_only"):
-            label = "Manager exit"
-        elif exit_order.get("trade_data") is False:
+        if exit_order.get("trade_data") is False:
             label = "Administrative close · excluded from trade data"
+        elif exit_order.get("management_only"):
+            label = "Manager exit"
         fields.append(leg(label, exit_order))
     if entry and entry.get("pricing") == "native L3":
         fields.append("<p><b>Paper fills</b></p>")

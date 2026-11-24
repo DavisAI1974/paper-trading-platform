@@ -45,6 +45,8 @@ def relay():
             ) WHERE json_extract(body,'$.kind')='paper order';
             CREATE INDEX IF NOT EXISTS trade_fills ON events(run, json_extract(body,'$.trade_id'), sequence)
                 WHERE json_extract(body,'$.kind')='fill';
+            CREATE INDEX IF NOT EXISTS order_lifecycle ON events(run, json_extract(body,'$.order_id'), sequence)
+                WHERE json_extract(body,'$.kind') IN ('order status','fill');
             CREATE INDEX IF NOT EXISTS trade_interruption ON events(run, json_extract(body,'$.trade_id'), sequence)
                 WHERE json_extract(body,'$.kind')='signal'
                   AND json_extract(body,'$.action') IN ('not scored','observation interrupted');
@@ -168,7 +170,7 @@ def relay():
                                 event = json.loads(body)
                                 if event.get("rule") != rule or not event.get("trade_id"):
                                     continue
-                                order = event.get("kind") in ("paper order", "fill")
+                                order = event.get("kind") in ("paper order", "fill", "order status")
                                 interrupted = event.get("action") in ("not scored", "observation interrupted")
                                 if order or interrupted:
                                     match = trade_rows(db, current, rule, trade_id=event["trade_id"], through=seq)
