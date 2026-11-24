@@ -94,7 +94,9 @@ def main():
         measure, limit = budget["measure"], budget["tokens"]
         if measure not in MEASURES or type(limit) is not int or limit <= 0:
             raise ValueError("measure must be 'last call' or 'all calls' and tokens a whole number above zero")
-        folder = Path(event["transcript_path"]).with_suffix("") / "subagents"
+        # The path handed to a hook inside a subagent may be the session's transcript or the subagent's own.
+        source = Path(event["transcript_path"])
+        folder = source.parent if source.name == f"agent-{agent}.jsonl" else source.with_suffix("") / "subagents"
         spent = figures(folder / f"agent-{agent}.jsonl")
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
         refuse(f"A token budget is on record and this run cannot be held to it ({type(error).__name__}: {error}). "
