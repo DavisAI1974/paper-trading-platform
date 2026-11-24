@@ -26,6 +26,95 @@ def git(root, *args):
     return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
 
 
+_LEFT = object()
+
+
+def _plain(value, name, left_out, depth=0):
+    """`value` as plain JSON, or _LEFT after naming it in left_out with the reason. Reads only."""
+    try:
+        if value is None or isinstance(value, (bool, int, str)):
+            return value
+        if isinstance(value, float):
+            if value != value or value in (float("inf"), float("-inf")):
+                left_out.append(dict(name=name, reason="not a finite number"))
+                return _LEFT
+            return value
+        if depth > 40:
+            left_out.append(dict(name=name, reason="nested deeper than 40"))
+            return _LEFT
+        if type(value).__module__ == "numpy" and hasattr(value, "item") and getattr(value, "ndim", 0) == 0:
+            return _plain(value.item(), name, left_out, depth + 1)
+        if isinstance(value, dict):
+            out = {}
+            for key, item in list(value.items()):
+                got = _plain(item, f"{name}.{key}", left_out, depth + 1)
+                if got is not _LEFT:
+                    out[key if isinstance(key, str) else str(key)] = got
+            return out
+        if isinstance(value, (list, tuple, set, frozenset)) or type(value).__name__ == "deque":
+            items = list(value) if not isinstance(value, (set, frozenset)) else sorted(value, key=repr)
+            out = []
+            for i, item in enumerate(items):
+                got = _plain(item, f"{name}[{i}]", left_out, depth + 1)
+                if got is _LEFT:
+                    out.append(None)  # keep the place; the entry is named in left_out
+                else:
+                    out.append(got)
+            return out
+        if isinstance(value, (bytes, bytearray)):
+            left_out.append(dict(name=name, reason="bytes cannot be written as JSON"))
+            return _LEFT
+        if callable(value):
+            left_out.append(dict(name=name, reason="a function or class, not a value"))
+            return _LEFT
+        if hasattr(value, "__dict__") or any(hasattr(c, "__slots__") for c in type(value).__mro__):
+            return _plain_attrs(value, name, left_out, depth + 1)
+        left_out.append(dict(name=name, reason=f"type {type(value).__name__} cannot be written as JSON"))
+    except Exception as error:
+        left_out.append(dict(name=name, reason=f"reading it raised {type(error).__name__}"))
+    return _LEFT
+
+
+def _plain_attrs(obj, name, left_out, depth=0):
+    """Every attribute of `obj` by its own name (a dict's items by key), each as plain JSON."""
+    if obj is None or isinstance(obj, dict):
+        return _plain(obj, name, left_out, depth)
+    names = list(getattr(obj, "__dict__", {}))
+    for cls in type(obj).__mro__:
+        slots = getattr(cls, "__slots__", ())
+        names.extend([slots] if isinstance(slots, str) else slots)
+    out = {}
+    for attr in dict.fromkeys(names):
+        try:
+            item = getattr(obj, attr)
+        except Exception as error:
+            left_out.append(dict(name=f"{name}.{attr}", reason=f"reading it raised {type(error).__name__}"))
+            continue
+        got = _plain(item, f"{name}.{attr}", left_out, depth + 1)
+        if got is not _LEFT:
+            out[attr] = got
+    return out
+
+
+def _book_depth(book, left_out):
+    """Both sides of root.book.Book as it stands, best outward, level by level, with the orders in queue order.
+
+    Prices and sizes as the book holds them (integers in the tape's price units). Reads only: nothing is applied.
+    Each level: price, size (total), orders (number), queue ([order id, size] front first).
+    """
+    out = {}
+    for key, side, outward in (("bid", b"B", True), ("ask", b"A", False)):
+        held = book.sides[side]
+        prices = list(reversed(held.prices)) if outward else list(held.prices)
+        levels = []
+        for price in prices:
+            line = held.lines[price]
+            queue = [[order.id, order.size] for order in line.orders.values()]
+            levels.append(dict(price=price, size=line.size, orders=len(queue), queue=queue))
+        out[key] = levels
+    return out
+
+
 def digest(path):
     with path.open("rb") as f:
         return hashlib.file_digest(f, "sha256").hexdigest()
@@ -434,6 +523,18 @@ class Session:
         lines = self._lines_at(e)
         if lines is not None:
             question["lines"] = extra["lines"] = lines
+        state, why = self._state_at(e)
+        if state is None:
+            extra["state_left_out"] = why
+        else:
+            question["state"] = state
+            book = state["book"]
+            extra.update(
+                state_sha256=hashlib.sha256(
+                    json.dumps(state, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+                book_levels_bid=None if book is None else len(book["bid"]),
+                book_levels_ask=None if book is None else len(book["ask"]),
+                inputs_named=sum(len(state["inputs"][k]) for k in ("strategy_inputs", "tick")))
         self.write("question", signal_sequence=sequence, rule=e["rule"], side=e.get("side"),
                    trade_id=e["trade_id"], received=e.get("received"), exchange=e.get("exchange"), **extra)
         self.decided["asked"] += 1
@@ -467,6 +568,41 @@ class Session:
         self.write("answer", action=action, asked_at_sequence=sequence, applied=action in ("take", "skip"),
                    latency_ns=latency, tape_received_ns=e.get("received"), **fields)
         return action == "take"
+
+    def _state_at(self, e):
+        """(state, None) or (None, the reason it is left out). Decider path only; never raises, changes nothing.
+
+        Everything the engine holds at the signal's own tick, read and not computed: the inputs object's every
+        attribute (walked, so a value added later appears), `engine.last` (the tick dict), `engine.p`, and the
+        order book's depth when the book can be reached. Same guard as `_lines_at`.
+        """
+        try:
+            t = self.engine.last
+            if t is None or t["position"] != e.get("position") or t["received"] != e.get("received"):
+                return None, "the engine's last tick is not the signal's own tick"
+            left_out = []
+            inputs = dict(
+                strategy_inputs=_plain_attrs(self.engine.inputs, "strategy_inputs", left_out),
+                tick=_plain_attrs(t, "tick", left_out),
+                previous_trade_tick=_plain_attrs(self.engine.p, "previous_trade_tick", left_out),
+            )
+            left_out.append(dict(name="engine.cl, engine.unsided_print_rules",
+                                 reason="the rules' own working state, not inputs the rules read as p.<name>"))
+            book = None
+            source = getattr(getattr(self, "feed", None), "book", None)
+            if source is None:
+                left_out.append(dict(name="book", reason="the weekly book is local to the feed's generator "
+                                     "(feed.py MboTape.book); the session holds no reference to it"))
+            else:
+                try:
+                    book = _book_depth(source, left_out)
+                except Exception as error:
+                    left_out.append(dict(name="book", reason=f"reading it raised {type(error).__name__}"))
+            state = dict(inputs=inputs, book=book, known_at_tape_ns=t["received"], left_out=left_out)
+            json.dumps(state, allow_nan=False)  # plain JSON or nothing
+            return state, None
+        except Exception as error:
+            return None, f"reading the state raised {type(error).__name__}"
 
     def _lines_at(self, e):
         """The dipole line and the exhaustion line as the engine holds them at this signal, or None.

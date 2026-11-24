@@ -381,3 +381,120 @@ def test_the_gate_puts_the_lines_the_engine_holds_in_the_question_and_its_row():
     s.engine.last = dict(tick, position=10)
     s.record(dict(action="open", rule="CL01", side="buy", trade_id="t2", position=11, received=5, exchange=4))
     assert "lines" not in seen[1]
+
+
+# ---- the state the decider is given. Every value below is a stand-in I named: not market data, written nowhere.
+class _Stand:
+    """Stands in for an object that holds named values."""
+    def __init__(self, **values):
+        self.__dict__.update(values)
+
+
+class _Slotted:
+    __slots__ = ("alpha", "beta")
+
+    def __init__(self):
+        self.alpha, self.beta = 3, "b"
+
+
+class _Raises:
+    @property
+    def broken(self):
+        raise RuntimeError("accessor")
+
+
+def _state_session(last, inputs, p=None, feed=None):
+    from types import SimpleNamespace
+    s = gate_session(None, [])
+    s.engine = SimpleNamespace(last=last, p=p, inputs=inputs)
+    if feed is not None:
+        s.feed = feed
+    return s
+
+
+def test_a_question_with_a_large_state_round_trips_through_the_mailbox(tmp_path):
+    from paper_platform.answers import MailboxDecider
+    big = dict(inputs=dict(tick={f"n{i}": i for i in range(2000)}), book=dict(bid=[dict(price=i, size=1, orders=1,
+               queue=[[i, 1]]) for i in range(3000)], ask=[]), known_at_tape_ns=9, left_out=[])
+    asked = dict(question(8), state=big)
+    answered = dict(action="skip", asked_at_sequence=8, by="agent:1")
+
+    def sleep(_):
+        (tmp_path / "q-8" / "answer.json").write_text(json.dumps(answered))
+
+    assert MailboxDecider(tmp_path, 5, 0, sleep=sleep).ask(asked) == answered
+    assert json.loads((tmp_path / "q-8" / "question.json").read_text()) == asked
+
+
+def test_state_gives_every_attribute_by_its_own_name_and_lists_what_it_leaves_out():
+    from collections import deque
+    flow = _Stand(width=60, trades=deque([(1, 0, 2, ("sha", 4))]), size=[2, 0], value=0.5)
+    inputs = _Stand(dipole=flow, later_added=7, slotted=_Slotted(), blob=b"x", fn=len, bad=float("nan"))
+    tick = dict(position=11, received=5, bid=100, ask=101, quote_facts=[dict(fact="x")], leg=(1, "up"))
+    s = _state_session(tick, inputs, p=dict(position=9))
+    state, why = s._state_at(dict(position=11, received=5))
+    assert why is None and state["known_at_tape_ns"] == 5
+    got = state["inputs"]
+    assert got["strategy_inputs"]["dipole"] == dict(width=60, trades=[[1, 0, 2, ["sha", 4]]], size=[2, 0], value=0.5)
+    assert got["strategy_inputs"]["later_added"] == 7 and got["strategy_inputs"]["slotted"] == dict(alpha=3, beta="b")
+    assert got["tick"] == dict(tick, leg=[1, "up"]) and got["previous_trade_tick"] == dict(position=9)
+    names = {x["name"] for x in state["left_out"]}
+    assert {"strategy_inputs.blob", "strategy_inputs.fn", "strategy_inputs.bad", "book"} <= names
+    assert all(x["reason"] for x in state["left_out"])
+    json.dumps(state, allow_nan=False)
+
+
+def test_state_is_left_out_when_the_tick_is_not_the_signals_own_and_never_raises():
+    inputs = _Stand(a=1)
+    tick = dict(position=11, received=5)
+    assert _state_session(tick, inputs)._state_at(dict(position=12, received=5))[0] is None
+    assert _state_session(None, inputs)._state_at(dict(position=11, received=5))[0] is None
+    state, why = _state_session(tick, _Raises())._state_at(dict(position=11, received=5))
+    assert why is None and state["inputs"]["strategy_inputs"] == {}  # a property is a class attribute, not walked
+    unset = _Slotted.__new__(_Slotted)  # its slots are never set: reading each raises AttributeError
+    state, why = _state_session(tick, _Stand(a=1, unset=unset))._state_at(dict(position=11, received=5))
+    assert why is None and state["inputs"]["strategy_inputs"]["a"] == 1
+    assert {x["name"] for x in state["left_out"]} >= {"strategy_inputs.unset.alpha", "strategy_inputs.unset.beta"}
+    inputs = _Stand(a=1)
+    state, why = _state_session(dict(position=11), inputs)._state_at(dict(position=11, received=5))
+    assert state is None and "KeyError" in why
+
+
+def test_state_book_reads_both_sides_best_outward_with_queues_from_a_stand_in_book():
+    from types import SimpleNamespace
+    line = lambda *orders: SimpleNamespace(size=sum(z for _, z in orders),
+                                           orders={i: SimpleNamespace(id=i, size=z) for i, z in orders})
+    book = SimpleNamespace(sides={
+        b"B": SimpleNamespace(prices=[10, 20, 30], lines={10: line((1, 1)), 20: line((2, 2), (3, 5)), 30: line((4, 4))}),
+        b"A": SimpleNamespace(prices=[40, 50], lines={40: line((5, 1)), 50: line((6, 2))})})
+    tick = dict(position=11, received=5)
+    s = _state_session(tick, _Stand(a=1), feed=SimpleNamespace(book=book))
+    state, _ = s._state_at(dict(position=11, received=5))
+    assert [x["price"] for x in state["book"]["bid"]] == [30, 20, 10]
+    assert [x["price"] for x in state["book"]["ask"]] == [40, 50]
+    assert state["book"]["bid"][1] == dict(price=20, size=7, orders=2, queue=[[2, 2], [3, 5]])
+    assert "book" not in {x["name"] for x in state["left_out"]}
+    broken = SimpleNamespace(sides={})
+    state, _ = _state_session(tick, _Stand(a=1), feed=SimpleNamespace(book=broken))._state_at(dict(position=11, received=5))
+    assert state["book"] is None and any(x["name"] == "book" for x in state["left_out"])
+
+
+def test_the_gate_puts_state_in_the_question_and_only_its_counts_in_the_row():
+    seen, rows = [], []
+
+    class Records:
+        def ask(self, question):
+            seen.append(question)
+            return dict(action="skip", by="x", asked_at_sequence=question["sequence"])
+
+    s = gate_session(Records(), rows)
+    from types import SimpleNamespace
+    s.engine = SimpleNamespace(last=dict(position=11, received=5, exchange=4), p=None, open={},
+                               inputs=_Stand(dipole=_Stand(width=60 * 10**9), exhaustion=_Stand(width=20 * 10**9)))
+    s.record(dict(action="open", rule="CL01", side="buy", trade_id="t1", position=11, received=5, exchange=4))
+    row = rows[1]
+    assert "state" in seen[0] and "state" not in row and row["state_sha256"] and row["inputs_named"] >= 1
+    assert row["book_levels_bid"] is None and row["book_levels_ask"] is None
+    s.engine.last = dict(position=10, received=5)
+    s.record(dict(action="open", rule="CL01", side="buy", trade_id="t2", position=11, received=5, exchange=4))
+    assert "state" not in seen[1]
