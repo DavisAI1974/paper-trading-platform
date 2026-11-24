@@ -220,6 +220,9 @@ def main():
     # A short test: the run stops itself this many minutes after the first paced record of the trade day,
     # by the same path as a manual stop (positions flattened, receipt written, the phone told).
     p.add_argument("--stop-after-minutes", type=float)
+    # A start point for the stored tape: this many minutes after the trade day's 6 pm Eastern open. The tape
+    # before it is read without waiting, to seat the book and warm the rule inputs, and nothing is decided there.
+    p.add_argument("--start-after-minutes", type=float)
     # The run does not wait for each order's and each fill's own push to markets-data before the next
     # tick. Every order and fill is still queued for a push at once, and a push carries the journal up to
     # the newest one waiting. Without this the first run test covered 3 seconds of tape in 11 minutes.
@@ -227,6 +230,12 @@ def main():
     args = p.parse_args()
     if args.stop_after_minutes is not None and args.stop_after_minutes <= 0:
         p.error("the stop of a short test must be a positive number of minutes")
+    if args.start_after_minutes is not None and (
+            args.start_after_minutes < 0 or args.capture or args.replay_capture or args.replay_receipt):
+        p.error("a start point is for the purchased archive, in minutes after the trade day's open")
+    paced_from = None
+    if args.start_after_minutes:
+        paced_from = trade_day_bounds(args.trade_day)[0] + round(args.start_after_minutes * 60 * 1_000_000_000)
     if args.replay_receipt and not args.replay_capture:
         p.error("select the stored live capture for receipt-based replay")
     if args.replay_capture and args.capture_connection is not None:
@@ -293,7 +302,7 @@ def main():
             market_key=args.market,
             started=started, captured=args.capture or args.replay_capture, capture_connection=args.capture_connection,
             replay_capture=args.replay_capture is not None, capture_commit=args.capture_commit, replay_receipt=receipt,
-            execution_plan=execution_plan, plan_source=plan_source,
+            execution_plan=execution_plan, plan_source=plan_source, paced_from_ns=paced_from,
         )
         pub = Publication(s, url, push_url)
         pending = deque()
@@ -430,7 +439,8 @@ def main():
             if next_row:
                 f, i = next_row
                 r = f.records[i]
-                if i >= f.vendor_snapshot and opens <= int(r["ts_event"]) < halts:
+                if (i >= f.vendor_snapshot and opens <= int(r["ts_event"]) < halts
+                        and (paced_from is None or int(r["ts_recv"]) >= paced_from)):
                     received = int(r["ts_recv"])
                     if base is None:
                         base = time.monotonic_ns() - received

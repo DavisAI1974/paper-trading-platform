@@ -34,8 +34,12 @@ class Session:
     def __init__(
         self, data_root, trade_day, *, message_budget, output_budget, market_key="nymex-ng", on_event=None,
         started=None, execution_plan=None, captured=None, plan_source=None, capture_connection=None,
-        replay_capture=False, capture_commit=None, replay_receipt=None,
+        replay_capture=False, capture_commit=None, replay_receipt=None, paced_from_ns=None,
     ):
+        # A start point inside the trade day, on the tape's own receive time (Greg, 2026-11-24: "Just do the
+        # next 30 min"). Before it the book, the matcher and the rule inputs are warmed and nothing is
+        # decided, journaled or ordered; the run starts new at that instant and carries no position into it.
+        self.paced_from_ns = paced_from_ns
         self.started = run_start_ns() / 1_000_000_000 if started is None else started
         # A run that follows the live feed stops before 5 pm Eastern when its 5.75 hours would land in the
         # 5 pm to 6 pm hour (Greg, 2026-11-24). A replay keeps the 5.75 hours: its tape is not on the wall clock.
@@ -156,6 +160,7 @@ class Session:
                 clock_stop=self.clock_stop,
                 message_budget=message_budget,
                 event_budget=output_budget,
+                paced_from_tape_ns=paced_from_ns,
             ),
         )
         (self.folder / "start.json").write_text(json.dumps(self.initial, indent=2), encoding="utf8")
@@ -284,9 +289,14 @@ class Session:
                     return None
                 if message.get("idle"):
                     return None
+                warming = self.paced_from_ns is not None and message["raw"]["ts_recv"] < self.paced_from_ns
                 if message["period"] != "vendor snapshot":
                     received = message["raw"]["ts_recv"]
                     while (expiry := self.engine.next_expiry_ns) is not None and expiry < received:
+                        if warming:
+                            # The windows expire as they would; before the start point nothing is recorded.
+                            self.engine.advance_clock(expiry)
+                            continue
                         self.advance_clock(expiry)
                         if self.state != "active":
                             return None
@@ -306,7 +316,7 @@ class Session:
                 if self.execution and self.events >= self.output_budget:
                     self.stop("budget reached")
                     return None
-                if self.captured and "live_eligible" in message and (
+                if warming or self.captured and "live_eligible" in message and (
                     not message["live_eligible"] or self.cursor <= self.warm_through
                 ):
                     # Warm the rule inputs but carry no historical position across the manual start.

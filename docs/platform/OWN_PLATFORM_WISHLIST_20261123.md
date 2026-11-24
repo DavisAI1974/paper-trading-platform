@@ -130,6 +130,9 @@
 
   **Greg, November 24: the speed bar waits. It is on the list of things to add later, at the foot of this file.** His words: "The speed bar can be put on the list md in the paper repo of things to add later. We aren't going to spend time now doing. We need to be doing a run test very very shortly". Nothing more was built on it. [Pace arithmetic](../../paper_platform/playback.py) stays as it is and nothing calls it, so no run is touched by it. The first run test goes at the tape's own pace.
 
+  **A start point for the stored tape, built in draft on Greg's word, not run** ("Just do the next 30 min for run 2"). The stored-tape workflow's box `stop_after_minutes` also takes START+MINUTES: `30+30` begins 30 minutes after the trade day's 6 pm Eastern open and runs 30 minutes. The tape before the start point is read without waiting: the book is seated from Sunday, the matcher sees every message, and the rule inputs are warmed, as a live run warms before its start. Nothing is decided, journaled or ordered before the start point, and no position is carried into it: the run starts new there (item 21). So a run started at 6:30 pm is not the continuation of a run started at 6 pm: a trade the earlier run would still hold at 6:30 pm is not in it. The receipt's constants carry the start point (`paced_from_tape_ns`). A receipt replay and the capture paths are not given it.
+
+
 ## THE RULES OF THE HOUSE
 
 - [x] **13.** A TRADE DAY is 6 pm Eastern the evening before to 5 pm Eastern on the named date. The 5 to 6 pm hour is its own marked stretch: no trades, messages kept. Never a bare "day" or date. DECIDED

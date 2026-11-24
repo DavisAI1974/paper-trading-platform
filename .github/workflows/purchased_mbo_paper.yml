@@ -38,7 +38,7 @@ on:
         required: true
         type: string
       stop_after_minutes:
-        description: For a short test, stop this many minutes after the first paced record. Empty for a full run
+        description: For a short test, minutes to run (30), or START+MINUTES to begin that far into the trade day (30+30). Empty for a full run
         type: string
         required: false
       phone_page:
@@ -160,6 +160,10 @@ jobs:
             plan_args+=(--no-phone-page)
           fi
           if [[ -n "$STOP_AFTER_MINUTES" && -z "$ORIGINAL_RUN" ]]; then
-            plan_args+=(--stop-after-minutes "$STOP_AFTER_MINUTES")
+            if [[ "$STOP_AFTER_MINUTES" == *+* ]]; then
+              plan_args+=(--start-after-minutes "${STOP_AFTER_MINUTES%%+*}" --stop-after-minutes "${STOP_AFTER_MINUTES#*+}")
+            else
+              plan_args+=(--stop-after-minutes "$STOP_AFTER_MINUTES")
+            fi
           fi
           exec python -B -m paper_platform.run "${capture_args[@]}" "${plan_args[@]}" --greg-go --data "$GITHUB_WORKSPACE/purchased-inputs" --market "$MARKET" --trade-day "$TRADE_DAY" --message-budget "$MESSAGE_BUDGET" --event-budget "$EVENT_BUDGET"
