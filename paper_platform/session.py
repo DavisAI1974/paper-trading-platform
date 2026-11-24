@@ -124,11 +124,18 @@ CLOSE_NOT_BUILT = "closing by answer is not built; the hold rule in force is the
 
 
 class Session:
+    # Only a session with a decider keeps the raw messages it has stepped through (see _decider_window_init).
+    # These stay None otherwise and nothing touches them.
+    _mbo = None
+    _mbo_counts = None
+    decider_mbo_window_s = None
+    decider_mbo_window_ns = None
+
     def __init__(
         self, data_root, trade_day, *, message_budget, output_budget, market_key="nymex-ng", on_event=None,
         started=None, execution_plan=None, captured=None, plan_source=None, capture_connection=None,
         replay_capture=False, capture_commit=None, replay_receipt=None, paced_from_ns=None,
-        answers=None, answer_close=False, decider=None,  # answer_close is accepted and ignored: closing by answer is not built
+        answers=None, answer_close=False, decider=None, decider_mbo_window_s=None,  # answer_close is accepted and ignored: closing by answer is not built
     ):
         # A decider (answers.py) is asked at each opening signal of a rule the plan trades; None = no gate.
         self.decider = decider
@@ -194,6 +201,8 @@ class Session:
         self.message_budget = message_budget
         self.output_budget = output_budget
         self.engine = Engine(trade_day, self.run, self.rules)
+        if decider is not None:
+            self._decider_window_init(decider_mbo_window_s)
         folder = self.data_root / self.market["archive"]
         self.capture_end = None
         self.liquidation_available = True
@@ -270,7 +279,8 @@ class Session:
             ),
         )
         if answers is not None or decider is not None:
-            self.initial["answers"] = dict(on=True, decider=decider is not None)
+            self.initial["answers"] = dict(on=True, decider=decider is not None,
+                                           decider_mbo_window_s=self.decider_mbo_window_s)
         (self.folder / "start.json").write_text(json.dumps(self.initial, indent=2), encoding="utf8")
         self.write("status", reason="started")
 
@@ -438,6 +448,8 @@ class Session:
                 self.timers_after_input.clear()
                 self.cursor = message["cursor"]
                 self.last = message
+                if self.decider is not None:
+                    self._decider_keep(message, warming)
                 if "weekly_book_boundary" in message:
                     self.weekly_book_boundaries.append(message["weekly_book_boundary"])
                 if self.captured:
@@ -608,12 +620,73 @@ class Session:
                                              feed_book_best=theirs, engine_tick_best=ours))
                 except Exception as error:
                     left_out.append(dict(name="book", reason=f"reading it raised {type(error).__name__}"))
-            state = dict(inputs=inputs, book=book, rules=rules, paper=paper, known_at_tape_ns=t["received"],
-                         left_out=left_out)
+            mbo_window = self._mbo_window_state(t, left_out)
+            state = dict(inputs=inputs, book=book, rules=rules, paper=paper, mbo_window=mbo_window,
+                         known_at_tape_ns=t["received"], left_out=left_out)
             json.dumps(state, allow_nan=False)  # plain JSON or nothing
             return state, None
         except Exception as error:
             return None, f"reading the state raised {type(error).__name__}"
+
+    def _decider_window_init(self, seconds):
+        """Decider only. The window of raw messages kept for the question, a declared input of the trial."""
+        from collections import deque
+        if seconds is None:
+            seconds = self.engine.inputs.dipole.width // NS  # the dipole line's own width
+        if not seconds > 0:
+            raise ValueError("the decider's MBO window is a positive number of seconds")
+        self.decider_mbo_window_s = seconds
+        self.decider_mbo_window_ns = round(seconds * NS)
+        self._mbo = deque()
+        self._mbo_counts = dict(stepped=0, in_trade_day=0, prints_in_trade_day=0,
+                                stepped_since_paced_start=0, prints_since_paced_start=0)
+
+    def _decider_keep(self, message, warming):
+        """Decider only. Keep a reference to the message just stepped; drop from the left what the window has passed.
+
+        Nothing is copied or converted here (that is done at question time). Warm-up messages are kept too; only
+        the counters tell warm-up apart. Vendor snapshot rows pass through and are in the window by receive time.
+        """
+        raw = message["raw"]
+        self._mbo.append(message)
+        bound = raw["ts_recv"] - self.decider_mbo_window_ns
+        while self._mbo and self._mbo[0]["raw"]["ts_recv"] <= bound:
+            self._mbo.popleft()
+        c = self._mbo_counts
+        print_ = raw["action"] == "T"
+        c["stepped"] += 1
+        if message["in_session"]:
+            c["in_trade_day"] += 1
+            c["prints_in_trade_day"] += print_
+        if self.paced_from_ns is not None and not warming:
+            c["stepped_since_paced_start"] += 1
+            c["prints_since_paced_start"] += print_
+
+    def _mbo_window_state(self, t, left_out):
+        """The raw messages from the window, oldest first, the last the signal's own; or None, named in left_out.
+
+        The window is receive times strictly after (signal receive time - window), the same edge the flows use
+        (a print leaves a flow when its receive time + width <= now). Nothing after the signal's own message.
+        """
+        try:
+            if self._mbo is None:
+                left_out.append(dict(name="mbo_window", reason="this session keeps no window"))
+                return None
+            kept = list(self._mbo)
+            own = next((i for i in range(len(kept) - 1, -1, -1)
+                        if kept[i].get("position_on_tape") == t["position"]
+                        and kept[i]["raw"]["ts_recv"] == t["received"]), None)
+            if own is None:
+                left_out.append(dict(name="mbo_window", reason="the signal's own message is not in the window"))
+                return None
+            bound = t["received"] - self.decider_mbo_window_ns
+            kept = [m for m in kept[:own + 1] if m["raw"]["ts_recv"] > bound]
+            messages = _plain(kept, "mbo_window.messages", left_out)
+            return dict(window_s=self.decider_mbo_window_s, messages=[] if messages is _LEFT else messages,
+                        count=len(kept))
+        except Exception as error:
+            left_out.append(dict(name="mbo_window", reason=f"reading it raised {type(error).__name__}"))
+            return None
 
     def _rules_state(self, left_out):
         """The rules' own working state as the engine holds it now, each attribute by its own name. Reads only."""
@@ -759,7 +832,7 @@ class Session:
                     waiting_at_stop=self.answers.waiting() if self.answers is not None else 0,
                     sha256=self.answers_hash.hexdigest(),
                     decider=dict(on=self.decider is not None, **self.decided, waited_ns=self.waited_ns,
-                                 sha256=self.decider_hash.hexdigest()),
+                                 sha256=self.decider_hash.hexdigest(), mbo_window_s=self.decider_mbo_window_s),
                     causal_check_covers="the rules' decisions without answers")
 
     def stop_capture(self, evidence):

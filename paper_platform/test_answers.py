@@ -552,3 +552,68 @@ def test_state_has_the_rules_working_state_and_the_paper_state_by_their_own_name
     assert v["inventory"] == {"t1": 2} and v["cash"] == {"t1": -50} and v["holding"] == ["t1"] and v["peak"] == {"t1": 7}
     assert state["paper"]["give_back_fraction"] is None and state["paper"]["also_before_profit"] is False
     assert "active_orders" in v and json.dumps(state, allow_nan=False)
+
+
+# ---- the MBO window. Every message below is a stand-in I named (just the keys the session reads): not market data.
+def _stand_message(position, received, action="T", in_session=True, period="trade day"):
+    return dict(cursor=position, position_on_tape=position, period=period, in_session=in_session,
+                source_sha256="stand-in", record_index=position, raw=dict(ts_recv=received, action=action))
+
+
+def _stepping_session(decider, messages, window_s=None, paced_from_ns=None):
+    """A Session by object.__new__ whose stream is the stand-in messages and whose engine does nothing."""
+    import io
+    import threading
+    from types import SimpleNamespace
+    from paper_platform.session import Session
+    s = object.__new__(Session)
+    s.lock, s.state, s.cursor, s.last, s.events = threading.RLock(), "active", -1, None, 0
+    s.decider, s.answers, s.execution, s.captured, s.paced_from_ns = decider, None, None, False, paced_from_ns
+    s.waited_ns, s.deadline, s.message_budget, s.output_budget = 0, 10**18, 10**9, 10**9
+    s.timers_after_input, s.weekly_book_boundaries, s.first_live_decision_cursor = [], [], None
+    s.stream, s.receives = iter(messages), io.BytesIO()
+    for m in messages:
+        m["received_by_replay_ns"] = 1
+    s.engine = SimpleNamespace(next_expiry_ns=None, tick=lambda m: [], begin_decision_batch=lambda: None,
+                               inputs=SimpleNamespace(dipole=SimpleNamespace(width=60 * 10**9)))
+    if decider is not None:
+        s._decider_window_init(window_s)
+    return s
+
+
+def test_the_window_keeps_only_what_is_inside_it_and_ends_with_the_signals_own_message():
+    n = 10**9
+    messages = [_stand_message(i, t * n, action=a) for i, (t, a) in enumerate(
+        [(1, "A"), (30, "T"), (41, "T"), (70, "T"), (100, "A")])]
+    s = _stepping_session(object(), messages, window_s=60)
+    assert s.decider_mbo_window_s == 60  # the default would also be 60: the dipole width
+    for _ in messages:
+        assert s.step(s.cursor) is not None
+    assert [m["position_on_tape"] for m in s._mbo] == [2, 3, 4]  # 41 s, 70 s, 100 s: 100 - 60 = 40 is outside
+    # asked at position 3 (receive 70 s): not the message after it, and 10 s is the edge
+    tick = dict(position=3, received=70 * n)
+    left = []
+    got = s._mbo_window_state(tick, left)
+    assert [m["position_on_tape"] for m in got["messages"]] == [2, 3] and got["count"] == 2 and got["window_s"] == 60
+    assert got["messages"][-1]["raw"]["ts_recv"] == 70 * n
+    assert s._mbo_window_state(dict(position=0, received=n), left) is None  # not in the window any more
+    assert left[-1]["name"] == "mbo_window"
+    c = s._mbo_counts
+    assert (c["stepped"], c["in_trade_day"], c["prints_in_trade_day"]) == (5, 5, 3)
+    assert json.dumps(got, allow_nan=False)
+    assert _stepping_session(object(), [], window_s=None).decider_mbo_window_ns == 60 * n
+    import pytest
+    with pytest.raises(ValueError):
+        _stepping_session(object(), [], window_s=0)
+
+
+def test_with_no_decider_the_window_and_counters_are_never_created_or_touched():
+    from paper_platform.session import Session
+    messages = [_stand_message(i, i * 10**9) for i in range(3)]
+    s = _stepping_session(None, messages)
+    for _ in messages:
+        s.step(s.cursor)
+    assert s._mbo is None and s._mbo_counts is None and s.decider_mbo_window_s is None
+    assert "_mbo" not in vars(s) and "_mbo_counts" not in vars(s) and "decider_mbo_window_s" not in vars(s)
+    assert Session._mbo is None and Session._mbo_counts is None
+    assert s.cursor == 2 and s.answers_receipt()["on"] is False if hasattr(s, "answers_off") else s.cursor == 2

@@ -161,12 +161,16 @@ def main():
     parser.add_argument("--decider-mailbox", type=Path,
                         help="a folder through which a decider answers take or skip at each opening signal")
     parser.add_argument("--decider-timeout-s", type=float, default=600)
+    parser.add_argument("--decider-mbo-window-s", type=float,
+                        help="seconds of raw MBO messages the decider's question carries (default: the dipole line's width)")
     parser.add_argument("--keep", type=Path, help="a folder to keep the journal, the receipt and the trade lines in")
     args = parser.parse_args()
     if args.from_minute < 0 or args.minutes <= 0:
         parser.error("the stretch begins at or after the open and holds a positive number of minutes")
     if args.decider_timeout_s <= 0:
         parser.error("the decider's timeout is a positive number of seconds")
+    if args.decider_mbo_window_s is not None and (args.decider_mbo_window_s <= 0 or not args.decider_mailbox):
+        parser.error("--decider-mbo-window-s is a positive number of seconds and needs --decider-mailbox")
     if args.decider_mailbox:
         used = mailbox_used(args.decider_mailbox)
         if used:
@@ -191,7 +195,8 @@ def main():
                           paced_from_ns=begin if args.from_minute else None,
                           answers=TimedAnswers(args.answers) if args.answers else None,
                           decider=MailboxDecider(args.decider_mailbox, args.decider_timeout_s)
-                          if args.decider_mailbox else None)
+                          if args.decider_mailbox else None,
+                          decider_mbo_window_s=args.decider_mbo_window_s)
         try:
             # Peek at each raw record's receive time, as the paced runner does, and admit it with step().
             for stored in session.feed.week:
