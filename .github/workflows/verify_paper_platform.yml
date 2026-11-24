@@ -1,5 +1,11 @@
 name: Verify paper platform on purchased MBO
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      verify_writer:
+        description: Check the markets-data deploy key with a dry-run push
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -44,3 +50,21 @@ jobs:
               result = check_prefix(HistoricalFeed(folder, trade_day), catalogue(), time.monotonic() + LIMIT_SECONDS)
               print(f"Trade day {trade_day}: {result['status']}, source cursor {result['cutoff']['cursor']}", flush=True)
           PY
+
+  verify-writer:
+    if: ${{ inputs.verify_writer && github.actor == 'DavisAI1974' && github.triggering_actor == 'DavisAI1974' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: DavisAI1974/markets-data
+          ref: 46199c5f4af03fde341535a7aff6a0396300cc73
+          ssh-key: ${{ secrets.MARKETS_DATA_DEPLOY_KEY }}
+          sparse-checkout: |
+            data/nymex_mbo/ng_v0_oct2023/MANIFEST.json
+          sparse-checkout-cone-mode: false
+      - name: Check SSH write access without creating a run branch
+        run: |
+          test "$(git remote get-url --push origin)" = "git@github.com:DavisAI1974/markets-data.git"
+          git push --dry-run origin "HEAD:refs/heads/paper-runs/verify-${GITHUB_RUN_ID}"

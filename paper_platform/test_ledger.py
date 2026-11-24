@@ -12,8 +12,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from .run import pace_to_record
-from .session import Session
+from .run import Publication, pace_to_record, writer_remote
+from .session import Session, git
 
 
 @pytest.fixture
@@ -115,3 +115,26 @@ def test_paced_expiry_reaches_journal_before_next_message(archive_copy):
         pytest.fail("the purchased prefix did not exercise an expiry-driven order")
     finally:
         session.stop("end of offline verification")
+
+
+def test_recorder_validates_the_push_destination_before_starting(archive_copy, monkeypatch):
+    https = "https://github.com/DavisAI1974/markets-data.git"
+    ssh = "git@github.com:DavisAI1974/markets-data.git"
+    monkeypatch.setenv("PAPER_RELAY_TOKEN", "verification")
+    monkeypatch.delenv("MARKETS_DATA_TOKEN", raising=False)
+    git(archive_copy, "remote", "set-url", "--push", "origin", ssh)
+    assert writer_remote(archive_copy) == ssh
+    git(archive_copy, "remote", "set-url", "--push", "origin", https)
+    with pytest.raises(ValueError, match="MARKETS_DATA_TOKEN"):
+        writer_remote(archive_copy)
+    monkeypatch.setenv("MARKETS_DATA_TOKEN", "verification")
+    remote = writer_remote(archive_copy)
+    pub = Publication(SimpleNamespace(run="verification"), "https://viewer.invalid", remote)
+    assert pub.env["GIT_CONFIG_KEY_0"] == f"http.{https}.extraheader"
+    other = "https://github.com/DavisAI1974/paper-trading-platform.git"
+    git(archive_copy, "remote", "set-url", "--add", "--push", "origin", other)
+    with pytest.raises(ValueError, match="single"):
+        writer_remote(archive_copy)
+    git(archive_copy, "config", "--replace-all", "remote.origin.pushurl", other)
+    with pytest.raises(ValueError, match="receipts must be pushed"):
+        writer_remote(archive_copy)

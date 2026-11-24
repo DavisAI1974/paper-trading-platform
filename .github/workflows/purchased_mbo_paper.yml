@@ -47,7 +47,8 @@ jobs:
           repository: DavisAI1974/markets-data
           ref: 46199c5f4af03fde341535a7aff6a0396300cc73
           path: purchased-inputs
-          persist-credentials: false
+          ssh-key: ${{ secrets.MARKETS_DATA_DEPLOY_KEY }}
+          persist-credentials: ${{ secrets.MARKETS_DATA_DEPLOY_KEY != '' }}
           sparse-checkout: |
             data/nymex_mbo/ng_v0_oct2023
             paper-trading
