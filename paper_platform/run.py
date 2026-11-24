@@ -59,6 +59,7 @@ class Publication:
         self.s = session
         self.url = url
         self.push_url = push_url
+        self.page_lost_rows = False  # set when the page answers that it holds less of this run than it was sent
         self.http = requests.Session()
         if url:  # no address: a run Greg started without the phone page (--no-phone-page)
             self.http.headers["Authorization"] = "Bearer " + os.environ["PAPER_RELAY_TOKEN"]
@@ -95,11 +96,20 @@ class Publication:
                 and type(target.get("next")) is int
                 and 0 <= target["next"] < event["sequence"]
             ):
+                # The page has restarted and lost rows of this run. They are sent again from the journal file,
+                # 128 to a post; one row to a post took minutes on a run of a few thousand rows.
+                self.page_lost_rows = True
+                again = []
                 with (self.s.folder / "events.jsonl").open(encoding="utf8") as f:
                     for line in f:
                         old = json.loads(line)
                         if target["next"] <= old["sequence"] <= event["sequence"]:
-                            self.post_again(old)
+                            again.append(self.packet(old))
+                            if len(again) == 128:
+                                self.post_rows_again(again)
+                                again = []
+                if again:
+                    self.post_rows_again(again)
                 return
         if response.status_code != 200 or response.json().get("next") != event["sequence"] + 1:
             raise RuntimeError("Render event delivery failed")
@@ -147,6 +157,12 @@ class Publication:
             if "remaining_paper_inventory" in event:
                 status["paper_inventory"] = event["remaining_paper_inventory"]
         return {"event": wire(event), "status": wire(status)}
+
+    def post_rows_again(self, packets):
+        response = self.http.post(self.url + "/ingest/batch", json={"packets": packets}, timeout=8,
+                                  allow_redirects=False)
+        if response.status_code != 200:
+            raise RuntimeError("Render journal recovery failed")
 
     def post_again(self, event):
         response = self.http.post(
@@ -368,7 +384,8 @@ def main():
         watcher.start()
 
         page_done = threading.Event()
-        prints = deque()
+        prints = []  # every point taken is kept, so a page that restarts can be given the whole line again
+        prints_sent = [0]
         held_print = [None]
 
         def sample_print(message):
@@ -387,15 +404,16 @@ def main():
                 held_print[0] = (raw["ts_recv"], raw["price"])
 
         def send_prints():
-            while prints:
-                count = min(len(prints), 1000)
-                batch = [list(prints[i]) for i in range(count)]
+            if pub.page_lost_rows:
+                pub.page_lost_rows = False
+                prints_sent[0] = 0
+            while prints_sent[0] < len(prints):
+                batch = [list(row) for row in prints[prints_sent[0]:prints_sent[0] + 1000]]
                 response = pub.http.post(pub.url + "/prints", json=dict(run=s.run, samples=batch), timeout=8,
                                          allow_redirects=False)
                 if response.status_code != 200:
                     raise RuntimeError("the page did not take the traded prices")
-                for _ in range(count):
-                    prints.popleft()
+                prints_sent[0] += len(batch)
 
         def feed_page():
             # The phone page is a view; markets-data is the record. With --keep-tape-pace a slow or failed
