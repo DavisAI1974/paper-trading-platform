@@ -34,22 +34,23 @@ jobs:
       DELIVERY_BUDGET: ${{ inputs.message_budget }}
       PAPER_CAPTURE_KEY: ${{ secrets.PAPER_CAPTURE_KEY }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Read the selected platform commit
+        shell: bash
+        run: |
+          git init --quiet .
+          git remote add origin https://github.com/DavisAI1974/paper-trading-platform.git
+          git fetch --depth=1 origin "$GITHUB_SHA"
+          git checkout --quiet --detach FETCH_HEAD
+      - uses: ./.github/actions/markets-data
         with:
-          persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          repository: DavisAI1974/markets-data
           path: checkpoint
-          ssh-key: ${{ secrets.MARKETS_DATA_DEPLOY_KEY }}
-          sparse-checkout: paper-trading/capture-backup
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+          paths: paper-trading/capture-backup
+          deploy-key: ${{ secrets.MARKETS_DATA_DEPLOY_KEY }}
+      - uses: ./.github/actions/markets-data
         with:
-          repository: DavisAI1974/markets-data
-          ref: 46199c5f4af03fde341535a7aff6a0396300cc73
           path: purchased-inputs
-          persist-credentials: false
-          sparse-checkout: data/nymex_mbo/ng_v0_oct2023
+          ref: 46199c5f4af03fde341535a7aff6a0396300cc73
+          paths: data/nymex_mbo/ng_v0_oct2023
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.13'

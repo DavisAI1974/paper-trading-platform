@@ -1,0 +1,51 @@
+name: Open the markets-data checkout
+description: Fetch the public input anonymously and optionally publish with an in-memory SSH identity
+inputs:
+  path:
+    required: true
+    description: Checkout directory
+  ref:
+    required: false
+    default: HEAD
+    description: Commit or branch to fetch
+  paths:
+    required: true
+    description: Sparse checkout directories
+  deploy-key:
+    required: false
+    description: Write-enabled markets-data deploy key for publishing
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        DEST: ${{ inputs.path }}
+        REF: ${{ inputs.ref }}
+        SPARSE_PATHS: ${{ inputs.paths }}
+      run: |
+        git init --quiet "$DEST"
+        cd "$DEST"
+        git remote add origin https://github.com/DavisAI1974/markets-data.git
+        git config remote.origin.promisor true
+        git config remote.origin.partialclonefilter blob:none
+        git sparse-checkout init --cone
+        git sparse-checkout set --stdin <<< "$SPARSE_PATHS"
+        git fetch --depth=1 --filter=blob:none origin "$REF"
+        git checkout --quiet --detach FETCH_HEAD
+    - if: inputs.deploy-key != ''
+      shell: bash
+      env:
+        DEPLOY_KEY: ${{ inputs.deploy-key }}
+        DEST: ${{ inputs.path }}
+      run: |
+        # A second checkout in the job can use the same agent.
+        if [[ -z "${SSH_AUTH_SOCK:-}" ]]; then
+          eval "$(env -u DEPLOY_KEY ssh-agent -s)" > /dev/null
+          ssh-add -q - <<< "$DEPLOY_KEY"
+          # GitHub's published public host key, from https://api.github.com/meta.
+          known_hosts="$RUNNER_TEMP/markets-data-known-hosts"
+          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > "$known_hosts"
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "GIT_SSH_COMMAND=ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts" >> "$GITHUB_ENV"
+        fi
+        git -C "$DEST" remote set-url --push origin git@github.com:DavisAI1974/markets-data.git

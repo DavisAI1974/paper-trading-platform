@@ -75,12 +75,16 @@ class Checkpoints:
                     if not destination.exists():
                         destination.write_bytes(self.cipher.encrypt(gzip.compress(block, compresslevel=1)))
         manifest = self.folder / "checkpoint.enc"
-        if manifest.exists() and json.loads(self.cipher.decrypt(manifest.read_bytes())) == blocks:
-            return
-        manifest.write_bytes(self.cipher.encrypt(json.dumps(blocks).encode()))
+        if not manifest.exists() or json.loads(self.cipher.decrypt(manifest.read_bytes())) != blocks:
+            manifest.write_bytes(self.cipher.encrypt(json.dumps(blocks).encode()))
+        # Stage even an unchanged manifest. A prior attempt may have stopped
+        # between writing the encrypted files, staging them and committing.
         git(self.root, "add", "--", self.folder.relative_to(self.root).as_posix())
-        git(self.root, "-c", "user.name=NG capture", "-c", "user.email=paper@users.noreply.github.com",
-            "commit", "-qm", "Checkpoint captured MBO deliveries")
+        staged = git(self.root, "diff", "--cached", "--name-only")
+        if staged:
+            git(self.root, "-c", "user.name=NG capture", "-c", "user.email=paper@users.noreply.github.com",
+                "commit", "-qm", "Checkpoint captured MBO deliveries")
+        # A prior push may have failed after the local commit succeeded.
         git(self.root, "push", "origin", "HEAD:refs/heads/" + self.branch)
 
 

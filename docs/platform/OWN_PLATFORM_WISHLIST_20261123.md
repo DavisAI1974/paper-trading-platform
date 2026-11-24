@@ -34,7 +34,7 @@
 
 - [ ] **7.** Everything the feed sends is recorded whole, as it arrives, with our receive time in nanoseconds. Raw, nothing dropped. DECIDED
 
-  **In progress.** PR 5 records DBN deliveries and host receive times and adds recovery checkpoints. A replacement runner can restore encrypted checkpoints from markets-data. The recorder persists the connection ID, last durable frame position and termination reason. A hard loss between checkpoints can lose original receive timestamps.
+  **In progress.** PR 5 records DBN deliveries and host receive times and adds recovery checkpoints. A replacement runner can restore encrypted checkpoints from markets-data. The recorder persists the connection ID, last durable frame position and termination reason. The final publisher also retries a locally committed checkpoint after a failed push, even when the capture has not changed. A hard loss between checkpoints can lose original receive timestamps.
 
 - [x] **8.** Real data only. No made-up numbers, not even to test code. DECIDED
 
@@ -144,7 +144,7 @@
 
 - [ ] **32.** Keys and tokens never in any file, print or commit. DECIDED
 
-  **In progress.** Platform workflows use secret stores. The historical sandbox credential was excluded from the migration. Its status was set aside at Greg’s request.
+  **In progress.** PR 5 fetches public source and purchased inputs anonymously. Where publication is enabled, the Actions secret goes directly to an SSH agent on the hosted runner. Git stores the markets-data push URL and uses the agent socket. Pushover and Render credentials come from secret stores. The historical sandbox credential was excluded from the migration. Its status was set aside at Greg’s request.
 
 - [x] **33.** Output goes only to markets-data, never to the Markets code repository. DECIDED
 
