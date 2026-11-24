@@ -10,10 +10,19 @@ class UnsidedPrintRules:
         self.last_step = {"bid": None, "ask": None}
         self.entered_run = {}
         self.taken_level = {}
+        self.after_gap = False
 
     def at(self, tick):
         self.facts = []
-        if not tick["trade"] or tick["bid"] is None or tick["ask"] is None:
+        if not tick["trade"]:
+            return []
+        if tick["bid"] is None or tick["ask"] is None:
+            self.quotes = QuoteRuns()
+            self.first_run.clear()
+            self.entered_run.clear()
+            self.taken_level.clear()
+            self.last_step = {"bid": None, "ask": None}
+            self.after_gap = True
             return []
         position = tick["position"]
         _, rows = self.quotes.tick(position, tick["received"], tick["bid"], tick["ask"])
@@ -40,6 +49,8 @@ class UnsidedPrintRules:
                 if tick["price"] != tick[quote]:
                     continue
                 step = self.last_step[quote]
+                if self.after_gap and step is None:
+                    continue
                 if quote in self.taken_level and self.taken_level[quote] == step:
                     continue
                 self.taken_level[quote] = step

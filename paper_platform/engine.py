@@ -153,7 +153,7 @@ class Engine:
                 )
         return events
 
-    def interrupt_cx(self, key, reason, tick, missing=False):
+    def interrupt_trade(self, key, reason, tick, missing=False):
         idea = self.open.pop(key)
         self.unmonitored[key] = idea
         self.managers.pop(key, None)
@@ -263,6 +263,12 @@ class Engine:
             rule = self.rules[idea["rule"]]
             if rule["family"] == "CL":
                 reads_unsided = rule.get("reads_unsided_prints", False)
+                if reads_unsided and t["trade"]:
+                    missing = [name for name in ("bid", "ask") if t[name] is None]
+                    if missing:
+                        reason = "not scored: the feed lacks " + ", ".join(missing)
+                        events.append(self.interrupt_trade(key, reason, t, missing=True))
+                        continue
                 close = self.unsided_print_rules.close(idea) if reads_unsided else self.cl.close(idea, message, t)
                 unsided = t["trade"] and t["aggressor"] is None and not reads_unsided
                 if unsided:
@@ -278,13 +284,13 @@ class Engine:
                         self.event(rule["id"], "held into settlement", "settlement window began", t, key)
                     )
             elif interrupted:
-                events.append(self.interrupt_cx(key, interrupted, t))
+                events.append(self.interrupt_trade(key, interrupted, t))
                 continue
             else:
                 close, missing = management(rule, idea["side"], idea["p"], idea["q"], t)
                 if missing:
                     reason = "not scored: the feed lacks " + ", ".join(sorted(set(missing)))
-                    events.append(self.interrupt_cx(key, reason, t, missing=True))
+                    events.append(self.interrupt_trade(key, reason, t, missing=True))
                     continue
                 events.extend(self.responses.prints((key,), t, self.event))
                 name = rule["id"]
@@ -358,9 +364,14 @@ class Engine:
             events.extend(self.responses.end(key, why, self.last, self.event))
         for key, idea in list(self.open.items()):
             if not administrative and self.rules[idea["rule"]]["family"] == "CX":
-                events.append(self.interrupt_cx(key, why, self.last))
+                events.append(self.interrupt_trade(key, why, self.last))
             else:
                 events.append(self.close_trade(key, why, self.last, administrative))
+        if not administrative:
+            for key, idea in list(self.unmonitored.items()):
+                if self.rules[idea["rule"]]["family"] == "CL":
+                    self.open[key] = self.unmonitored.pop(key)
+                    events.append(self.close_trade(key, why, self.last, administrative=True))
         if administrative:
             self.open.update(self.unmonitored)
             self.unmonitored.clear()

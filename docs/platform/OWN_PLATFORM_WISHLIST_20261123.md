@@ -108,7 +108,9 @@
 
 - [ ] **18.** If the feed lacks what a rule needs, that rule's trades are marked "not scored: the feed lacks &lt;what&gt;" and stay out of all scoring. DECIDED
 
-  **Reopened for the 32-strategy catalogue.** The CX path journals the missing fields when it cannot assess an open trade. CL16 and CL17 also need quotes to monitor their exits. On a print missing its bid or offer, their handler clears the current quote facts and returns. An already-open trade gets neither an exit assessment nor a journal event identifying the missing input. That trade needs a “not scored” record with its ID, source print and missing field. An unknown aggressor is a valid input for these two rules. [Unsided-print rules](../../paper_platform/unsided_print_rules.py) · [Decision engine](../../paper_platform/engine.py)
+  **Fixed in draft.** On a print missing its bid, offer or both, every open CL16 or CL17 trade gets one unscored event naming the missing fields, its trade ID and the source print. Its observation ends. The rule clears its quote-run history across the gap. CL17 requires an observed step on the affected side before another touch at that level qualifies. Administrative closure remains separate from research exits. The normal unknown aggressor still qualifies for both strategies. Merge remains outstanding.
+
+  **Finding in the earlier draft.** The CX path journals the missing fields when it cannot assess an open trade. CL16 and CL17 also need quotes to monitor their exits. On a print missing its bid or offer, their handler clears the current quote facts and returns. An already-open trade gets neither an exit assessment nor a journal event identifying the missing input. That trade needs a “not scored” record with its ID, source print and missing field. An unknown aggressor is a valid input for these two rules. [Unsided-print rules](../../paper_platform/unsided_print_rules.py) · [Decision engine](../../paper_platform/engine.py)
 
 ## THE RUN
 
