@@ -92,6 +92,8 @@
 
 - [ ] **16.** NO AVERAGING, pooling, ranking or labels. Each trade is its own line. DECIDED
 
+  **Built in draft.** The individual trade row now retains its own inventory and working order IDs at observation interruption, including a manager's independent exposure. Those values are labeled with their time so they remain distinct from later fills or a final close. Review and merge remain outstanding.
+
   **Built in draft.** The phone page and trades API keep one chronological row per run, strategy and trade ID in both the full run and the strategy filter. A signal can open a row before an order exists. Later orders, partial fills and administrative closes update that row. A manager’s trade retains its own row and can reference its parent entry. Review and merge are pending.
 
 - [ ] **17.** How a paper fill is priced: OPEN, Greg's word. Until then each paper trade carries both quotes (bid and ask) at its entry and its exit, and no result figure.

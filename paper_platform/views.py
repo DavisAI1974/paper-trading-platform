@@ -114,6 +114,12 @@ def trade_card(trade, profile):
         fields.append(leg(label + " · No order sent", attempt))
     if trade["observation"]:
         fields.append(f"<p>{e(trade['observation']['reason'])}</p>")
+    exposure = trade.get("interruption_exposure")
+    if exposure:
+        fields.append(f"<p>At observation stop · {time_at(exposure)} · "
+                      f"Net contracts {e(exposure['remaining_contracts'])}</p>")
+        for order_id in exposure["working_order_ids"]:
+            fields.append(f"<small>Working order at that time · {e(order_id)}</small>")
     if trade["exit"] is None:
         if trade["exit_signal"]:
             fields.append(leg("Exit signal", trade["exit_signal"]))

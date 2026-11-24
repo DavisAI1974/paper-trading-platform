@@ -93,7 +93,7 @@ def trade_rows(db, run, rule=None, *, trade_id=None, through=None):
                 continue
             row = rows[key] = dict(rule=key[0], trade_id=key[1], entry=None, exit=None,
                                    entry_signal=None, exit_signal=None, orders=[], fills=[],
-                                   order_states={}, unsubmitted=[], observation=None)
+                                   order_states={}, unsubmitted=[], observation=None, interruption_exposure=None)
         if kind == "paper order":
             row["orders"].append(event)
             if action == "open" and row["entry"] is None:
@@ -112,6 +112,8 @@ def trade_rows(db, run, rule=None, *, trade_id=None, through=None):
                 row["fills"].append(event)
             elif event.get("submitted") is False:
                 row["unsubmitted"].append(event)
+            elif event.get("execution_event") == "observation ended with paper exposure":
+                row["interruption_exposure"] = event
             if event.get("order_id"):
                 row["order_states"][event["order_id"]] = event
 
