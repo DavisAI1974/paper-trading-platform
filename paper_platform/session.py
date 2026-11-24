@@ -1,6 +1,7 @@
 """One authorized paper session. The raw DBN stays in the input archive, addressed by hash and record."""
 
 import hashlib
+from importlib.metadata import version
 import json
 import struct
 import subprocess
@@ -75,6 +76,7 @@ class Session:
             market=market_key,
             trade_day=trade_day.isoformat(),
             code_commit=self.revision,
+            order_book={"engine": "NautilusTrader", "version": version("nautilus_trader"), "type": "L3_MBO"},
             inputs=self.feed.sources,
             manifest_sha256=digest(folder / "MANIFEST.json"),
             data_commit=git(self.data_root, "rev-parse", "HEAD"),

@@ -10,7 +10,7 @@ The Render service serves the HTML and read API. Server-sent events update an op
 
 ## Replay and evidence
 
-ROOT's archive reader checks file hashes and record counts. A fresh session rebuilds the book from Sunday, checks each later opening restatement and retains the raw record's file hash and zero-based index. The original compressed bytes stay in the purchased input archive. The receive-time sidecar holds one little-endian unsigned 64-bit replay-host nanosecond timestamp per delivered record in that same order. Signals use historical receive time. The replay host's clock controls pacing and run duration.
+ROOT's archive reader checks file hashes and record counts. NautilusTrader maintains the L3 order book that supplies strategy bids and asks. ROOT supplies the exchange queue rules and the source history for individual orders. At each later UTC file's restatement the reader compares the carried order IDs, FIFO order and remaining quantities before accepting further records. A fresh session rebuilds the book from Sunday, checks each later opening restatement and retains the raw record's file hash and zero-based index. The original compressed bytes stay in the purchased input archive. The receive-time sidecar holds one little-endian unsigned 64-bit replay-host nanosecond timestamp per delivered record in that same order. Signals use historical receive time. The replay host's clock controls pacing and run duration.
 
 Only a named trade day's records reach the strategy adapter. The existing research ROOT gate remains intact. Each trade record retains both quotes when available. The ledger records unpriced paper orders. Greg's fill policy is open. Each forced closing order carries its stop reason and `trade_data=false`. There is no research P&L.
 

@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 from crypto_ng.tick import LEAN_NS, LINE_NS, line, reads
 from root import tape
+from root.book import ASK, BID, Book
 
 from .engine import Engine
 from .feed import HistoricalFeed
@@ -28,12 +29,21 @@ def test_every_field_order_and_midnight_restatement(feed):
     first, second = feed.week
     boundary = len(first.records)
     it = feed.messages()
+    reference = Book()
+    snapshot_bit = tape.flag_bits()["F_SNAPSHOT"]
     for i, event in enumerate(islice(it, boundary)):
         assert event["cursor"] == i
         assert event["record_index"] == i
         assert event["source_sha256"] == first.sha256
         assert event["received_by_replay_ns"] > event["raw"]["ts_recv"]
         expected = first.records[i]
+        reference.apply(
+            *(expected[field].item() for field in (
+                "action", "side", "price", "size", "order_id", "flags", "ts_event", "ts_recv", "sequence"
+            )),
+            i, carried=bool(int(expected["flags"]) & snapshot_bit), written=event["in_session"],
+        )
+        assert (event["best_bid"], event["best_ask"]) == (reference.best(BID), reference.best(ASK))
         assert event["raw"] == {
             k: expected[k].decode() if expected.dtype[k].kind == "S" else int(expected[k])
             for k in expected.dtype.names
