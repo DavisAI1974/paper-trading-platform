@@ -403,10 +403,17 @@ class _Raises:
         raise RuntimeError("accessor")
 
 
-def _state_session(last, inputs, p=None, feed=None):
+def _stand_last_message(position=11, received=5, sequence=5, order_id=99, new=None):
+    """A stand-in for the session's last message: only the keys the book guard reads."""
+    return dict(position_on_tape=position, raw=dict(ts_recv=received, sequence=sequence, order_id=order_id),
+                order_change=dict(new=new))
+
+
+def _state_session(last, inputs, p=None, feed=None, message=None):
     from types import SimpleNamespace
     s = gate_session(None, [])
     s.engine = SimpleNamespace(last=last, p=p, inputs=inputs)
+    s.last = _stand_last_message() if message is None else message
     if feed is not None:
         s.feed = feed
     return s
@@ -464,7 +471,7 @@ def test_state_book_reads_both_sides_best_outward_with_queues_from_a_stand_in_bo
     from types import SimpleNamespace
     line = lambda *orders: SimpleNamespace(size=sum(z for _, z in orders),
                                            orders={i: SimpleNamespace(id=i, size=z) for i, z in orders})
-    book = SimpleNamespace(sides={
+    book = SimpleNamespace(last_sequence=5, orders={}, sides={
         b"B": SimpleNamespace(prices=[10, 20, 30], lines={10: line((1, 1)), 20: line((2, 2), (3, 5)), 30: line((4, 4))}),
         b"A": SimpleNamespace(prices=[40, 50], lines={40: line((5, 1)), 50: line((6, 2))})})
     tick = dict(position=11, received=5, bid=30, ask=40)
@@ -472,7 +479,9 @@ def test_state_book_reads_both_sides_best_outward_with_queues_from_a_stand_in_bo
     state, _ = s._state_at(dict(position=11, received=5))
     assert [x["price"] for x in state["book"]["bid"]] == [30, 20, 10]
     assert [x["price"] for x in state["book"]["ask"]] == [40, 50]
-    assert state["book"]["bid"][1] == dict(price=20, size=7, orders=2, queue=[[2, 2], [3, 5]])
+    assert state["book"]["bid"][1] == dict(price=20, size=7, orders=2, queue=[[2, 2], [3, 5]],
+                                                   provenance=[[None] * 10, [None] * 10])
+    assert state["book"]["totals"]["bid"]["levels"] == 3 and len(state["book"]["provenance_fields"]) == 10
     assert "book" not in {x["name"] for x in state["left_out"]}
     broken = SimpleNamespace(sides={})
     state, _ = _state_session(tick, _Stand(a=1), feed=SimpleNamespace(book=broken))._state_at(dict(position=11, received=5))
@@ -482,7 +491,7 @@ def test_state_book_reads_both_sides_best_outward_with_queues_from_a_stand_in_bo
 def test_state_book_is_left_out_with_both_pairs_when_its_best_levels_are_not_the_ticks_stand_ins():
     from types import SimpleNamespace
     line = lambda: SimpleNamespace(size=1, orders={1: SimpleNamespace(id=1, size=1)})
-    book = SimpleNamespace(sides={b"B": SimpleNamespace(prices=[30], lines={30: line()}),
+    book = SimpleNamespace(last_sequence=5, orders={}, sides={b"B": SimpleNamespace(prices=[30], lines={30: line()}),
                                   b"A": SimpleNamespace(prices=[40], lines={40: line()})})
     here = dict(position=11, received=5)
     for bid, ask in ((30, 41), (29, 40), (None, 40), (30, None)):  # one side differs or is unreadable
@@ -491,7 +500,7 @@ def test_state_book_is_left_out_with_both_pairs_when_its_best_levels_are_not_the
         left = [x for x in state["left_out"] if x["name"] == "book"]
         assert state["book"] is None and left[0]["reason"] == "the feed's book is not at the signal's tick"
         assert left[0]["feed_book_best"] == dict(bid=30, ask=40) and left[0]["engine_tick_best"] == dict(bid=bid, ask=ask)
-    empty = SimpleNamespace(sides={b"B": SimpleNamespace(prices=[], lines={}), b"A": SimpleNamespace(prices=[], lines={})})
+    empty = SimpleNamespace(last_sequence=5, orders={}, sides={b"B": SimpleNamespace(prices=[], lines={}), b"A": SimpleNamespace(prices=[], lines={})})
     s = _state_session(dict(here, bid=None, ask=None), _Stand(a=1), feed=SimpleNamespace(book=empty))
     assert s._state_at(dict(here))[0]["book"] is None  # an unreadable side is never a match
 
@@ -617,3 +626,34 @@ def test_with_no_decider_the_window_and_counters_are_never_created_or_touched():
     assert "_mbo" not in vars(s) and "_mbo_counts" not in vars(s) and "decider_mbo_window_s" not in vars(s)
     assert Session._mbo is None and Session._mbo_counts is None
     assert s.cursor == 2 and s.answers_receipt()["on"] is False if hasattr(s, "answers_off") else s.cursor == 2
+
+
+def test_the_book_must_be_the_session_readers_book_at_the_signals_own_message():
+    from types import SimpleNamespace
+    line = lambda: SimpleNamespace(size=1, orders={1: SimpleNamespace(id=1, size=1)})
+    held = SimpleNamespace(price=30, size=4, side=b"B", entered_pos=8)  # a stand-in order the stand-in book holds
+    sides = {b"B": SimpleNamespace(prices=[30], lines={30: line()}), b"A": SimpleNamespace(prices=[40], lines={40: line()})}
+    tick = dict(position=11, received=5, bid=30, ask=40)
+
+    def ask(book, message):
+        s = _state_session(tick, _Stand(a=1), feed=SimpleNamespace(book=book), message=message)
+        state, _ = s._state_at(dict(position=11, received=5))
+        left = [x for x in state["left_out"] if x["name"] == "book"]
+        return state["book"], left
+
+    mine = _stand_last_message(order_id=7, new=(30, 4, "B", 8))
+    book, left = ask(SimpleNamespace(last_sequence=5, orders={7: held}, sides=sides), mine)
+    assert book is not None and not left
+    # another reader's book, or one ahead by a message: the sequence differs
+    book, left = ask(SimpleNamespace(last_sequence=6, orders={7: held}, sides=sides), mine)
+    assert book is None and "last exchange sequence" in left[0]["detail"]
+    # the order the message changed is not what the book holds
+    book, left = ask(SimpleNamespace(last_sequence=5, orders={7: SimpleNamespace(price=30, size=3, side=b"B", entered_pos=8)},
+                                     sides=sides), mine)
+    assert book is None and "order differs" in left[0]["detail"]
+    # a message that removed its order: the book must hold none
+    gone = _stand_last_message(order_id=7, new=None)
+    assert ask(SimpleNamespace(last_sequence=5, orders={}, sides=sides), gone)[0] is not None
+    assert ask(SimpleNamespace(last_sequence=5, orders={7: held}, sides=sides), gone)[0] is None
+    # the session's last message is not the signal's own
+    assert ask(SimpleNamespace(last_sequence=5, orders={}, sides=sides), _stand_last_message(position=10))[0] is None

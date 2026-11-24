@@ -96,6 +96,10 @@ def _plain_attrs(obj, name, left_out, depth=0):
     return out
 
 
+ORDER_PROVENANCE = ("entered_event", "entered_recv", "entered_pos", "placed_event", "placed_recv", "placed_pos",
+                    "previous_pos", "steps", "carried_over_weekend", "entered_written")
+
+
 def _book_depth(book, left_out):
     """Both sides of root.book.Book as it stands, best outward, level by level, with the orders in queue order.
 
@@ -103,6 +107,7 @@ def _book_depth(book, left_out):
     Each level: price, size (total), orders (number), queue ([order id, size] front first).
     """
     out = {}
+    totals = {}
     for key, side, outward in (("bid", b"B", True), ("ask", b"A", False)):
         held = book.sides[side]
         prices = list(reversed(held.prices)) if outward else list(held.prices)
@@ -110,8 +115,17 @@ def _book_depth(book, left_out):
         for price in prices:
             line = held.lines[price]
             queue = [[order.id, order.size] for order in line.orders.values()]
-            levels.append(dict(price=price, size=line.size, orders=len(queue), queue=queue))
+            # Each order's own provenance, in the same queue order (ROOT's Order fields; null where a stand-in lacks one).
+            provenance = [[getattr(order, field, None) for field in ORDER_PROVENANCE] for order in line.orders.values()]
+            levels.append(dict(price=price, size=line.size, orders=len(queue), queue=queue, provenance=provenance))
         out[key] = levels
+        totals[key] = dict(size=getattr(held, "size", None), orders=getattr(held, "orders", None), levels=len(levels))
+    out["totals"] = totals
+    out["provenance_fields"] = list(ORDER_PROVENANCE)
+    for name in ("last_sequence", "filled_in_event", "irregular"):
+        got = _plain(getattr(book, name, None), f"book.{name}", left_out)
+        if got is not _LEFT:
+            out[name] = got
     return out
 
 
@@ -614,12 +628,22 @@ class Session:
                                   ask=(source.sides[b"A"].prices or [None])[0])
                     ours = dict(bid=t.get("bid"), ask=t.get("ask"))
                     if all(theirs[k] is not None and theirs[k] == ours[k] for k in ("bid", "ask")):
-                        book = _book_depth(source, left_out)
+                        refusal = self._book_is_not_at(source, t)
+                        if refusal is None:
+                            book = _book_depth(source, left_out)
+                        else:
+                            left_out.append(dict(name="book", reason="the feed's book is not the session's own reader's "
+                                                 "book at the signal's message", **refusal))
                     else:
                         left_out.append(dict(name="book", reason="the feed's book is not at the signal's tick",
                                              feed_book_best=theirs, engine_tick_best=ours))
                 except Exception as error:
                     left_out.append(dict(name="book", reason=f"reading it raised {type(error).__name__}"))
+            left_out.append(dict(name="book.native", reason="the Nautilus OrderBook mirror (feed.book.native) is not read: "
+                                 "its accessors are not confirmed read-only; the ROOT book above is the same book, "
+                                 "checked against it at each file boundary (verify_queues)"))
+            left_out.append(dict(name="paper.venues.*.engine", reason="each venue's native Nautilus matching-engine book "
+                                 "and its queue positions are not read: the accessors are not confirmed read-only"))
             mbo_window = self._mbo_window_state(t, left_out)
             state = dict(inputs=inputs, book=book, rules=rules, paper=paper, mbo_window=mbo_window,
                          known_at_tape_ns=t["received"], left_out=left_out)
@@ -627,6 +651,32 @@ class Session:
             return state, None
         except Exception as error:
             return None, f"reading the state raised {type(error).__name__}"
+
+    def _book_is_not_at(self, book, t):
+        """None when `book` is the book of the session's own reader just after the signal's message, else why not.
+
+        The session's last message (the one the engine's tick came from) must be the signal's own. Then the book's
+        last applied exchange sequence must be that message's, and the book's entry for that message's order id must
+        equal what that message's own order change says it became ((price, size, side, entered position), or none).
+        A reader that is ahead (a timer fires after the next record was read) or another reader's book fails one of
+        these. Reads only.
+        """
+        message = getattr(self, "last", None)
+        if message is None:
+            return dict(detail="the session has no last message")
+        raw = message["raw"]
+        if message.get("position_on_tape") != t["position"] or raw["ts_recv"] != t["received"]:
+            return dict(detail="the session's last message is not the signal's own")
+        if book.last_sequence != raw["sequence"]:
+            return dict(detail="the book's last exchange sequence differs from the signal's message",
+                        book_last_sequence=book.last_sequence, message_sequence=raw["sequence"])
+        held = book.orders.get(raw["order_id"])
+        now = None if held is None else (held.price, held.size, held.side.decode(), held.entered_pos)
+        expected = message["order_change"]["new"]
+        if (None if expected is None else tuple(expected)) != now:
+            return dict(detail="the book's entry for the message's order differs from the message's own order change",
+                        book_order=now, message_order=expected)
+        return None
 
     def _decider_window_init(self, seconds):
         """Decider only. The window of raw messages kept for the question, a declared input of the trial."""
