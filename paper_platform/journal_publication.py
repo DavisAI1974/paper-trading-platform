@@ -113,9 +113,12 @@ class GitJournal:
         # commit before staging any later prefix, always using a fast-forward.
         self._push_commit()
         if self.commit is None:
-            base = self.git("rev-parse", "HEAD", read_output=True)
-            self.git("read-tree", base)
-            self.commit = base
+            # The run branch starts with no parent and holds only the run's own folder. The data
+            # checkout holds no file contents outside its sparse folder, so a first commit built on its
+            # commit makes git fetch every file of that commit, and the first push then carries them all.
+            # The receipt records the data commit.
+            self.git("read-tree", "--empty")
+            self.commit = ""
         for name, size in cut.sizes.items():
             self._stage_prefix(name, size)
         tree = self.git("write-tree", read_output=True)
@@ -123,7 +126,8 @@ class GitJournal:
             message = f"Paper {cut.trigger} through journal sequence {cut.sequence} [skip ci]"
             self.commit = self.git("-c", "user.name=NG Paper Recorder", "-c",
                                    "user.email=paper@users.noreply.github.com", "commit-tree",
-                                   tree, "-p", self.commit, "-m", message, read_output=True)
+                                   tree, *(("-p", self.commit) if self.commit else ()), "-m", message,
+                                   read_output=True)
             self.tree = tree
         self._push_commit()
         with self.progress:
