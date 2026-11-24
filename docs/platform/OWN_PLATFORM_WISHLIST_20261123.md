@@ -324,6 +324,8 @@
 
   **What this review is not.** No test, check, workflow or paper session was run, on Greg's instruction for this pass. Every adjustment is unrun code, the ones in `run.py`, `session.py`, `run_clock.py`, `paper_execution.py`, `views.py` and the workflows included. The reading covered the files each item rests on, not every file in the repository. Items 20, 24 and 25 still need an authorized run to show what they do.
 
+  **A parse-only pass, November 24, on Greg's go ("Do the parse-only pass"). Nothing failed to parse.** Made on the branch head `3952da7`, in Ccode's session, with Python 3.13.18. Every file was read for its grammar and none was run or imported: 53 Python files, 10 YAML files (the workflows, the shared action and the Render blueprint), 35 JSON files. The phone page template has no stray `$`, and each of its 20 names is supplied by the page builder. What this does not show: a misspelled name, a wrong import, a wrong argument, or anything the code does when it runs. Those show only on the verification workflow or on a run. The last verification of this branch was on November 23 at an early commit (`7252561`) and failed one phone-page check of 27; nothing pushed since has been verified.
+
 ## TO ADD LATER (not among the 35)
 
 Things Greg has asked for and set aside for now. Nothing here is being built. Each line says where its notes are.
