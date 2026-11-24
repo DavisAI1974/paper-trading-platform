@@ -27,19 +27,23 @@ def prices(row, profile):
             f"{e(profile['price_unit'])}")
 
 
+def eastern_time(received):
+    """A tape time on the Eastern clock. Never a bare date: the trade day (6 pm Eastern the evening before
+    to 5 pm Eastern) or the 5 pm to 6 pm stretch is named first, from the tape receive time given."""
+    received = int(received)
+    seconds, nanos = divmod(received, 1_000_000_000)
+    moment = datetime.fromtimestamp(seconds, ZoneInfo("America/New_York"))
+    try:
+        name, named = calendar_label(received)
+        day = f"trade day {named:%Y-%m-%d}" if named else name
+    except ValueError:
+        day = "no trade day"
+    return f"{day} · {moment:%H:%M:%S}.{nanos:09d} {moment:%Z} (Eastern clock date {moment:%Y-%m-%d})"
+
+
 def trade_card(trade, profile):
     def time_at(event):
-        # Never a bare date: the trade day (6 pm Eastern the evening before to 5 pm Eastern) or the
-        # 5 pm to 6 pm stretch is named first. The label is taken from the tape receive time the row carries.
-        received = int(event.get("fill_received_ns", event["received"]))
-        seconds, nanos = divmod(received, 1_000_000_000)
-        moment = datetime.fromtimestamp(seconds, ZoneInfo("America/New_York"))
-        try:
-            name, named = calendar_label(received)
-            day = f"trade day {named:%Y-%m-%d}" if named else name
-        except ValueError:
-            day = "no trade day"
-        return f"{day} · {moment:%H:%M:%S}.{nanos:09d} {moment:%Z} (Eastern clock date {moment:%Y-%m-%d})"
+        return eastern_time(event.get("fill_received_ns", event["received"]))
 
     def leg(label, order):
         at = time_at(order)
@@ -188,7 +192,7 @@ def card(event, profile):
     if event.get("recorded_ns") is not None:
         seconds, nanos = divmod(int(event["recorded_ns"]), 1_000_000_000)
         recorded = datetime.fromtimestamp(seconds, ZoneInfo("America/New_York"))
-        fields.append(f"<small>Journal · {recorded:%Y-%m-%d %H:%M:%S}.{nanos:09d} {recorded:%Z}</small>")
+        fields.append(f"<small>Journal, runner's clock · {recorded:%Y-%m-%d %H:%M:%S}.{nanos:09d} {recorded:%Z}</small>")
     if event.get("entry"):
         fields.append(f"<small>Entry · {prices(event['entry'], profile)} · {e(event['entry']['received'])} ns</small>")
     if "bid" in event or "ask" in event:
@@ -209,6 +213,9 @@ def card(event, profile):
     ]:
         if event.get(field) is not None:
             fields.append(f"<small>{label} · {e(event[field])}</small>")
+    if event.get("received") is not None:
+        # The same tape time on the Eastern clock, with its trade day named.
+        fields.append(f"<small>{time_label.removesuffix(' (ns)')} · {eastern_time(event['received'])}</small>")
     return "<article>" + "".join(fields) + "</article>"
 
 
@@ -249,7 +256,7 @@ def stop_details(state, rule=""):
 def run_history(market, rule, runs):
     return '<details><summary>Recent runs</summary><ul>' + "".join(
         '<li><a href="/?' + e(urlencode(dict(market=market, rule=rule, run=identifier))) + '">'
-        + (e(day) + " · " if day else "") + e(identifier) + "</a> · " + e(status) + "</li>"
+        + (e("trade day " + str(day)) + " · " if day else "") + e(identifier) + "</a> · " + e(status) + "</li>"
         for identifier, day, status in runs
     ) + "</ul></details>" if runs else ""
 
@@ -317,7 +324,7 @@ def page(market, rule, state, history=(), *, live=True, run="", trades=(), runs=
         run_url=e("/?" + urlencode(dict(market=market, rule=rule, run=displayed or run))),
         hide_run="" if displayed or run else "hidden",
         earlier=older_events_link(market, rule, displayed, earlier),
-        trade_day=e(state.get("trade_day") or ""),
+        trade_day=e(f"trade day {state['trade_day']}" if state.get("trade_day") else ""),
         latest_link=f'<a href="{e(latest_url)}">Follow latest run</a>' if run and live else "",
         run_history=run_history(market, rule, runs) if live else "",
         hide_filters="" if live else 'style="display:none"',
