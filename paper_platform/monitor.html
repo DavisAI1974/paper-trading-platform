@@ -8,10 +8,12 @@ p{margin:.35rem 0}article{padding:1rem 0;border-bottom:1px solid #344146}small{d
 select,button{font:inherit;padding:.35rem;background:#1b292a;color:#fff;border:1px solid #70817b;border-radius:.3rem}
 form{display:flex;gap:.7rem;align-items:end;flex-wrap:wrap;margin:1rem 0}label{display:grid;font-size:.9rem}#status{color:#9ce6ba}
 #trades:not(:empty) + .empty-trades{display:none}
+details li{overflow-wrap:anywhere}details a{color:#9ce6ba}
 .spec{white-space:pre-wrap;color:#ccdad7}summary{cursor:pointer}
 </style><script defer src="/static/htmx-2.0.8/htmx.min.js"></script></head><body hx-history="false">
 <header><small>$venue · $asset · Paper trading</small><h1>$title</h1><p id="status" role="status">$status</p></header>
 <form method="get" action="/" hx-boost="true" hx-push-url="true" $hide_filters><input type="hidden" name="run" value="$run"><label>Market<select name="market">$markets</select></label><label>Strategy<select name="rule">$rules</select></label><button>Show</button></form>
+$run_history
 $definition
 $trade_section
 <section id="events" data-stream="$stream" aria-label="Trading events">$cards</section>

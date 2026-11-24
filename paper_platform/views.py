@@ -103,7 +103,7 @@ def card(event, profile):
     return "<article>" + "".join(fields) + "</article>"
 
 
-def page(market, rule, state, history=(), *, live=True, run="", trades=()):
+def page(market, rule, state, history=(), *, live=True, run="", trades=(), runs=()):
     profiles = markets()
     profile = profiles[market]
     rules = catalogue()
@@ -151,6 +151,13 @@ def page(market, rule, state, history=(), *, live=True, run="", trades=()):
         markets=options([(k, v["name"]) for k, v in profiles.items()], market),
         rules=options([("", "All strategies")] + [(k, k) for k in profile["rules"]], rule or ""),
         run=e(run),
+        run_history=(
+            '<details><summary>Recent runs</summary><ul>' + "".join(
+                '<li><a href="/?' + e(urlencode(dict(market=market, rule=rule, run=identifier))) + '">'
+                + (e(day) + " · " if day else "") + e(identifier) + "</a> · " + e(status) + "</li>"
+                for identifier, day, status in runs
+            ) + "</ul></details>" if runs and live else ""
+        ),
         hide_filters="" if live else 'style="display:none"',
         definition=definition,
         trade_section=(

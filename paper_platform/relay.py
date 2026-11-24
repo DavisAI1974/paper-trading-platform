@@ -261,7 +261,12 @@ def relay():
                 (state.get("run"), rule, rule),
             ).fetchall()
             trades = trade_rows(db, state.get("run"), rule) if rule else []
+            runs = db.execute(
+                "SELECT run, json_extract(body,'$.trade_day'), json_extract(body,'$.status') "
+                "FROM sessions WHERE json_extract(body,'$.market')=? ORDER BY first_ns DESC LIMIT 50",
+                (market,),
+            ).fetchall()
         return page(market, rule, state, [json.loads(r[0]) for r in reversed(recent)],
-                    run=run or state.get("run", ""), trades=trades)
+                    run=run or state.get("run", ""), trades=trades, runs=runs)
 
     return app
