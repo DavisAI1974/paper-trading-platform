@@ -56,7 +56,9 @@ class Publication:
         self.url = url
         self.push_url = push_url
         self.last_push = time.monotonic()
-        self.sent = 0
+        self.commit = None
+        self.tree = None
+        self.published_commit = None
         self.http = requests.Session()
         self.http.headers["Authorization"] = "Bearer " + os.environ["PAPER_RELAY_TOKEN"]
         self.env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
@@ -69,37 +71,44 @@ class Publication:
             )
         self.branch = "paper-runs/" + session.run
 
-    def command(self, *args):
+    def command(self, *args, read_output=False):
         proc = subprocess.run(
             ["git", "-C", str(self.s.data_root), *args],
             env=self.env,
-            stdout=subprocess.DEVNULL,
+            stdout=subprocess.PIPE if read_output else subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            text=True,
             timeout=25,
         )
         if proc.returncode:
             raise RuntimeError("markets-data git " + args[0] + " failed")
+        return proc.stdout.strip() if read_output else None
 
     def push(self):
         s = self.s
         path = s.folder.relative_to(s.data_root).as_posix()
+        if self.commit is None:
+            git_dir = Path(self.command("rev-parse", "--absolute-git-dir", read_output=True))
+            self.env["GIT_INDEX_FILE"] = str(git_dir / ("paper-index-" + s.run))
+            base = self.command("rev-parse", "HEAD", read_output=True)
+            self.command("read-tree", base)
+            self.commit = base
+        # Freeze the journal and receive sidecar together. The commit consumes this
+        # tree even if a watchdog subsequently records a stop or administrative fill.
         with s.lock:
             if not s.receives.closed:
                 s.receives.flush()
-            self.command("add", "--", path)
-        self.command(
-            "-c",
-            "user.name=NG Paper Recorder",
-            "-c",
-            "user.email=paper@users.noreply.github.com",
-            "commit",
-            "--allow-empty",
-            "-qm",
-            "Append paper events [skip ci]",
-            "--",
-            path,
-        )
-        self.command("push", self.push_url, "HEAD:refs/heads/" + self.branch)
+            self.command("add", "--sparse", "--", path)
+            tree = self.command("write-tree", read_output=True)
+        if tree != self.tree:
+            self.commit = self.command(
+                "-c", "user.name=NG Paper Recorder", "-c", "user.email=paper@users.noreply.github.com",
+                "commit-tree", tree, "-p", self.commit, "-m", "Append paper events [skip ci]", read_output=True,
+            )
+            self.tree = tree
+        if self.published_commit != self.commit:
+            self.command("push", self.push_url, self.commit + ":refs/heads/" + self.branch)
+            self.published_commit = self.commit
         self.last_push = time.monotonic()
 
     def send(self, event):
