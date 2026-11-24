@@ -120,6 +120,8 @@
 
   **Open, not changed.** (a) When the clock stop falls between a message being admitted and its decisions being recorded, the live run records none for that message and its replay records them all. The fix needs a new receipt field and a matching step in the replay. (b) A replay's own constants always read the full 5.75 hours, whatever stop the live run had, and nothing compares them. (c) The comparison of paper orders and fills checks a fixed list of fields and leaves the rest, the receipt's shutdown record and remaining contracts among them. (d) The replay restores the newest capture checkpoint, not one named by the live receipt; a difference in the frames is caught afterwards by the comparison, not before the replay. (e) The causal preflight follows the engine's ticks only, so the timer path is outside the cutoff check.
 
+  **Corrected the same day (Claude): the phone's words.** Greg decided the paper runs use the stored tape fed like live (item 1). The notice now says "paper replay" only for the replay of an earlier run's receipt; a run of the stored tape is told as a "paper run".
+
 ## THE RULES OF THE HOUSE
 
 - [x] **13.** A TRADE DAY is 6 pm Eastern the evening before to 5 pm Eastern on the named date. The 5 to 6 pm hour is its own marked stretch: no trades, messages kept. Never a bare "day" or date. DECIDED

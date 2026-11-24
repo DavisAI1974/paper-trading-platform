@@ -237,8 +237,9 @@ def main():
     except ValueError as error:
         refuse(str(error))
     s = pub = journal = None
-    # The phone is told whether a stop is a live run's or a replay's.
-    activity = "paper run" if args.capture else "paper replay"
+    # A run of the stored tape fed at live pace is a paper run. Only the replay of an earlier run's
+    # receipt is told to the phone as a replay.
+    activity = "paper replay" if args.replay_receipt else "paper run"
     finished = threading.Event()
     alert_sent = threading.Event()
     why = "failure"
