@@ -87,23 +87,22 @@ def relay():
             )
         return {"next": seq + 1}
 
-    def selected(db, run, market):
+    def session_state(db, run, market):
         if run:
             row = db.execute(
-                "SELECT run FROM sessions WHERE run=? AND json_extract(body,'$.market')=?", (run, market)
+                "SELECT body FROM sessions WHERE run=? AND json_extract(body,'$.market')=?", (run, market)
             ).fetchone()
         else:
             row = db.execute(
-                "SELECT run FROM sessions WHERE json_extract(body,'$.market')=? ORDER BY first_ns DESC LIMIT 1",
+                "SELECT body FROM sessions WHERE json_extract(body,'$.market')=? ORDER BY first_ns DESC LIMIT 1",
                 (market,),
             ).fetchone()
-        return row[0] if row else None
+        return json.loads(row[0]) if row else {"status": "Waiting for a session", "events": 0}
 
     @app.get("/api/session", dependencies=[Depends(viewer)])
     def status(run: str | None = None, market: str = "nymex-ng"):
         with connect() as db:
-            row = db.execute("SELECT body FROM sessions WHERE run=?", (selected(db, run, market),)).fetchone()
-        return json.loads(row[0]) if row else {"status": "Waiting for a session", "events": 0}
+            return session_state(db, run, market)
 
     @app.get("/api/markets", dependencies=[Depends(viewer)])
     def market_list():
@@ -127,13 +126,16 @@ def relay():
             cursor, current = after, run
             while True:
                 with connect() as db:
-                    current = selected(db, current, market)
-                    batch = db.execute(
-                        "SELECT sequence,body FROM events WHERE run=? AND sequence>? ORDER BY sequence LIMIT 256",
-                        (current, cursor),
-                    ).fetchall()
-                    saved = db.execute("SELECT body FROM sessions WHERE run=?", (current,)).fetchone()
-                state = json.loads(saved[0]) if saved else {}
+                    # Keep terminal status and the event batch in the same SQLite snapshot.
+                    db.execute("BEGIN")
+                    state = session_state(db, current, market)
+                    batch = []
+                    if "run" in state:
+                        current = state["run"]
+                        batch = db.execute(
+                            "SELECT sequence,body FROM events WHERE run=? AND sequence>? ORDER BY sequence LIMIT 256",
+                            (current, cursor),
+                        ).fetchall()
                 for cursor, body in batch:
                     event = json.loads(body)
                     if rule and event.get("rule") != rule:
@@ -145,9 +147,10 @@ def relay():
                         yield body + "\n"
                 if len(batch) == 256:
                     continue
-                if not follow or state and state["status"] != "active":
+                if not follow or ("run" in state and state["status"] != "active"):
                     if html:
-                        yield "event: finished\ndata: {}\n\n"
+                        data = json.dumps({"status": state["status"]})
+                        yield f"event: finished\ndata: {data}\n\n"
                     return
                 await asyncio.sleep(0.1)
 
@@ -188,13 +191,14 @@ def relay():
             raise HTTPException(404, "unknown market")
         if rule not in markets()[market]["rules"]:
             rule = ""
-        state = status(run, market)
         with connect() as db:
+            db.execute("BEGIN")
+            state = session_state(db, run, market)
             recent = db.execute(
                 "SELECT body FROM events WHERE run=? AND (?='' OR json_extract(body,'$.rule')=?) "
                 "ORDER BY sequence DESC LIMIT 100",
                 (state.get("run"), rule, rule),
             ).fetchall()
-        return page(market, rule, state, [json.loads(r[0]) for r in reversed(recent)])
+        return page(market, rule, state, [json.loads(r[0]) for r in reversed(recent)], run=run)
 
     return app
