@@ -344,3 +344,40 @@ def test_a_used_mailbox_folder_is_found(tmp_path):
     assert mailbox_used(tmp_path / "none") is None and mailbox_used(tmp_path) is None
     (tmp_path / "q-7").mkdir()
     assert mailbox_used(tmp_path) == "q-7"
+
+
+def test_a_question_with_lines_round_trips_through_the_mailbox(tmp_path):
+    from paper_platform.answers import MailboxDecider
+    asked = dict(question(7), exchange_ns=3, lines=dict(dipole=dict(value=0.25, width_s=60),
+                                                         exhaustion=dict(value=None, width_s=20)))
+    answered = dict(action="skip", asked_at_sequence=7, by="agent:1")
+
+    def sleep(_):
+        (tmp_path / "q-7" / "answer.json").write_text(json.dumps(answered))
+
+    assert MailboxDecider(tmp_path, 5, 0, sleep=sleep).ask(asked) == answered
+    assert json.loads((tmp_path / "q-7" / "question.json").read_text()) == asked
+
+
+def test_the_gate_puts_the_lines_the_engine_holds_in_the_question_and_its_row():
+    from types import SimpleNamespace
+    seen = []
+
+    class Records:
+        def ask(self, question):
+            seen.append(question)
+            return dict(action="skip", by="x", asked_at_sequence=question["sequence"])
+
+    rows = []
+    s = gate_session(Records(), rows)
+    tick = dict(position=11, received=5, exchange=4, dipole=0.5, exhaustion=None)
+    s.engine = SimpleNamespace(last=tick, open={}, inputs=SimpleNamespace(
+        dipole=SimpleNamespace(width=60 * 10**9), exhaustion=SimpleNamespace(width=20 * 10**9)))
+    s.record(dict(action="open", rule="CL01", side="buy", trade_id="t1", position=11, received=5, exchange=4))
+    lines = dict(dipole=dict(value=0.5, width_s=60), exhaustion=dict(value=None, width_s=20))
+    assert seen[0]["lines"] == lines and seen[0]["exchange_ns"] == 4 and rows[1]["lines"] == lines
+    assert rows[1]["exchange"] == 4
+    # not the signal's own tick: left out
+    s.engine.last = dict(tick, position=10)
+    s.record(dict(action="open", rule="CL01", side="buy", trade_id="t2", position=11, received=5, exchange=4))
+    assert "lines" not in seen[1]

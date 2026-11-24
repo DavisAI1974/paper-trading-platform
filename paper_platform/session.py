@@ -428,9 +428,14 @@ class Session:
         """Journal the question, block on the decider, journal its answer. True only on a take."""
         sequence = signal["sequence"]
         question = dict(sequence=sequence, rule=e["rule"], side=e.get("side"), trade_id=e["trade_id"],
-                        tape_received_ns=e.get("received"), journal=str(self.folder / "events.jsonl"))
+                        tape_received_ns=e.get("received"), exchange_ns=e.get("exchange"),
+                        journal=str(self.folder / "events.jsonl"))
+        extra = {}
+        lines = self._lines_at(e)
+        if lines is not None:
+            question["lines"] = extra["lines"] = lines
         self.write("question", signal_sequence=sequence, rule=e["rule"], side=e.get("side"),
-                   trade_id=e["trade_id"], received=e.get("received"))
+                   trade_id=e["trade_id"], received=e.get("received"), exchange=e.get("exchange"), **extra)
         self.decided["asked"] += 1
         started = time.monotonic_ns()
         try:
@@ -462,6 +467,26 @@ class Session:
         self.write("answer", action=action, asked_at_sequence=sequence, applied=action in ("take", "skip"),
                    latency_ns=latency, tape_received_ns=e.get("received"), **fields)
         return action == "take"
+
+    def _lines_at(self, e):
+        """The dipole line and the exhaustion line as the engine holds them at this signal, or None.
+
+        Read from the tick the engine worked out for the signal's own message (`engine.last`, the dict
+        StrategyInputs.at returned: its `dipole` and `exhaustion` are the flows' values after that message's own print),
+        and the flows' widths from the inputs. Nothing is computed here; a line that is empty is null. Given only when
+        that tick is the signal's own (same tape position and receive time); otherwise left out.
+        """
+        try:
+            t = self.engine.last
+            if t is None or t["position"] != e.get("position") or t["received"] != e.get("received"):
+                return None
+            inputs = self.engine.inputs
+            return dict(
+                dipole=dict(value=t["dipole"], width_s=inputs.dipole.width // NS),
+                exhaustion=dict(value=t["exhaustion"], width_s=inputs.exhaustion.width // NS),
+            )
+        except Exception:
+            return None
 
     def _gated(self, e):
         """True when `record` will ask the decider about this decision: it adds a question row and an answer row."""
