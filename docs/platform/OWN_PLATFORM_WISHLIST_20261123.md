@@ -14,6 +14,8 @@
 
   **In progress.** All 30 rule files are available. End-to-end operation depends on Frankie’s and the agents’ execution choices. Six manager rules reference a parent entry.
 
+  **Ccode, November 24. Waiting on item 17.** The item 17 plan names which rules take part and each manager's parent entries. No plan exists yet, so the wiring for a selected rule or manager has not been started.
+
 - [x] **3.** A strategy is a rule that opens and closes a trade. Each rule is a file in git; each change is a commit. DECIDED
 
   **Our build.** Each rule has its own tracked JSON file. [Rule catalogue](../../paper_platform/rules)
@@ -109,6 +111,10 @@
 - [ ] **23.** A BUDGET: the moment any budget is reached everything stops and Greg is notified on his phone at once. Holds for agent runs too. DECIDED
 
   **In progress.** The platform has message, event and wall-clock limits. The runner wakes a Pushover worker when the session enters its stop state so receipt writing and Render delivery can proceed independently. Phone delivery and Ccode’s agent-run budget handling need evidence.
+
+  **Ccode, November 24. Agent-run budget built in draft, not run.** The branch had no agent launcher, so Ccode added one. [Agent launcher](../../paper_platform/agent_launcher.py) · [Manual workflow](../../.github/workflows/agent_run.yml) A run started through it sends one brief to a model. The launcher takes the API's own count of the input, adds the output reserve and refuses the call when the total would pass the token budget. A timer on the process ends the run at the clock budget. A budget stop, a run stop, a failure and a completed run each publish a record on an `agent-runs/<run>` branch of markets-data and send the phone notice through the platform's notice sender. The launcher refuses to start without Greg's go, the Pushover secrets and the API key.
+
+  **Missing decisions.** The budget for an agent run: none is on record for the platform. The launcher has no default, so Greg supplies the token budget, the output reserve and the clock budget at each start. The `ANTHROPIC_API_KEY` Actions secret is Greg's to add. Agents started inside a Claude Code session do not pass through the launcher. In Ccode's sessions so far the token count of such an agent was reported only when it ended, so a budget cannot stop one part-way. That gap is open.
 
 ## WHAT GREG SEES
 
