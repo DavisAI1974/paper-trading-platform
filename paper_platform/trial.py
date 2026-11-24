@@ -45,7 +45,7 @@ from root.calendar import clock_days_needed, trade_day_bounds
 
 from .answers import MailboxDecider, TimedAnswers
 from .market import replay_market
-from .session import Session
+from .session import Session, digest
 
 STOP = "trial ended at the end of its stretch of tape"
 ORIGIN = "https://github.com/DavisAI1974/markets-data.git"
@@ -164,36 +164,84 @@ class MarketSeries:
 
     quotes.jsonl: a line each time the best bid or best ask changes (and one for the first message of the stretch).
     prints.jsonl: a line for every trade print. Kept for learning after the fact; the session never reads it.
+
+    A message is written only when the trial DECIDES on it (`decided`, set by the trial from the session's own rule:
+    not before the paced start on the receive clock, and inside the trade day on the exchange clock). A write that
+    raises stops the series, never the trial: the failure is kept in `failure`.
     """
 
     def __init__(self, folder, begin_ns):
         self.begin_ns = begin_ns
-        self.quotes = (Path(folder) / "quotes.jsonl").open("w", encoding="utf8", newline="\n")
-        self.prints = (Path(folder) / "prints.jsonl").open("w", encoding="utf8", newline="\n")
+        self.folder = Path(folder)
+        self.quotes = (self.folder / "quotes.jsonl").open("w", encoding="utf8", newline="\n")
+        self.prints = (self.folder / "prints.jsonl").open("w", encoding="utf8", newline="\n")
         self.count = dict(quotes=0, prints=0)
         self.standing = None
         self.first = True
+        self.failure = None
+        self.first_tape_received_ns = self.last_tape_received_ns = None
 
-    def add(self, message):
-        if message["period"] == "vendor snapshot":
+    def add(self, message, decided):
+        if self.failure is not None or message["period"] == "vendor snapshot":
             return
-        line = quote_line(message)
-        standing = tuple(v for k, v in line.items() if k in ("bid", "ask", "bid_size", "ask_size"))
-        changed = standing != self.standing
-        self.standing = standing  # warm-up messages before the stretch are read too, not written
-        if line["tape_received_ns"] < self.begin_ns:
-            return
-        if changed or self.first:
-            self.quotes.write(json.dumps(line, separators=(",", ":")) + "\n")
-            self.count["quotes"] += 1
-        self.first = False
-        if message["raw"]["action"] == "T":
-            self.prints.write(json.dumps(print_line(message), separators=(",", ":")) + "\n")
-            self.count["prints"] += 1
+        try:
+            line = quote_line(message)
+            standing = tuple(v for k, v in line.items() if k in ("bid", "ask", "bid_size", "ask_size"))
+            changed = standing != self.standing
+            self.standing = standing  # messages before the first decided one are read too, not written
+            if not decided:
+                return
+            if self.first_tape_received_ns is None:
+                self.first_tape_received_ns = line["tape_received_ns"]
+            self.last_tape_received_ns = line["tape_received_ns"]
+            if changed or self.first:
+                self.quotes.write(json.dumps(line, separators=(",", ":")) + "\n")
+                self.count["quotes"] += 1
+            self.first = False
+            if message["raw"]["action"] == "T":
+                self.prints.write(json.dumps(print_line(message), separators=(",", ":")) + "\n")
+                self.count["prints"] += 1
+        except Exception as error:
+            self.failure = f"{type(error).__name__}: {error}"
 
     def close(self):
-        self.quotes.close()
-        self.prints.close()
+        for name in ("quotes", "prints"):
+            try:
+                getattr(self, name).close()
+            except Exception as error:
+                self.failure = self.failure or f"closing {name}.jsonl: {type(error).__name__}: {error}"
+
+    def finish(self, begin, end):
+        """After close: the hash of each file and market-series.json beside them. Returns what the last line prints."""
+        out = dict(self.count)
+        hashes = {}
+        for name in ("quotes.jsonl", "prints.jsonl"):
+            try:
+                hashes[name] = digest(self.folder / name)
+            except Exception as error:
+                self.failure = self.failure or f"hashing {name}: {type(error).__name__}"
+        try:
+            (self.folder / "market-series.json").write_text(json.dumps(dict(
+                counts=self.count, sha256=hashes, first_tape_received_ns=self.first_tape_received_ns,
+                last_tape_received_ns=self.last_tape_received_ns, stretch_tape_ns=[begin, end],
+                boundary=BOUNDARY, failure=self.failure), indent=2), encoding="utf8")
+            hashes["market-series.json"] = digest(self.folder / "market-series.json")
+        except Exception as error:
+            self.failure = self.failure or f"writing market-series.json: {type(error).__name__}"
+        out.update(sha256=hashes, failure=self.failure)
+        return out
+
+
+BOUNDARY = ("a message is in the series when the trial decides on it: its exchange time is inside the trade day "
+            "(ts_event from the 6 pm open), and, with --from-minute above 0, its receive time (ts_recv) is at or after "
+            "the stretch's start; the end is the first message at or after the end on the receive clock")
+
+
+def decided(message, begin_ns, from_minute):
+    """True when the session decides on this message: the session's own test (warming is ts_recv < the paced start,
+    set only when --from-minute is above 0) and the engine's in-trade-day test (`in_session`, the exchange clock)."""
+    warming = bool(from_minute) and message["raw"]["ts_recv"] < begin_ns
+    return bool(message["in_session"]) and not warming
 
 
 def mailbox_used(folder):
@@ -259,11 +307,14 @@ def main():
                           decider=MailboxDecider(args.decider_mailbox, args.decider_timeout_s)
                           if args.decider_mailbox else None,
                           decider_mbo_window_s=args.decider_mbo_window_s)
-        series = None
+        series = series_failure = None
         if args.keep_market:
             kept = args.keep.resolve() / session.run
             kept.mkdir(parents=True)
-            series = MarketSeries(kept, begin)
+            try:
+                series = MarketSeries(kept, begin)
+            except Exception as error:
+                series_failure = f"opening the series files: {type(error).__name__}: {error}"
         try:
             # Peek at each raw record's receive time, as the paced runner does, and admit it with step().
             for stored in session.feed.week:
@@ -276,7 +327,7 @@ def main():
                     before = session.last
                     session.step(session.cursor)
                     if series is not None and session.last is not before:
-                        series.add(session.last)
+                        series.add(session.last, decided(session.last, begin, args.from_minute))
                 else:
                     continue
                 break
@@ -300,11 +351,16 @@ def main():
             with (kept / "trades.jsonl").open("w", encoding="utf8", newline="\n") as out:
                 for line in lines:
                     out.write(json.dumps(line, separators=(",", ":")) + "\n")
+        kept_market = None
+        if series is not None:
+            kept_market = series.finish(begin, end)
+        elif series_failure:
+            kept_market = dict(failure=series_failure)
         print(json.dumps(dict(
             figures=figures(rows, lines), run=session.run, status=session.state, trade_day=args.trade_day.isoformat(),
             stretch_tape_ns=[begin, end], code_commit=session.revision, plan=str(args.plan), exit=plan.get("exit"),
             messages=session.cursor + 1, kept=str(kept) if kept else None,
-            **(dict(kept_market=series.count) if series is not None else {})), separators=(",", ":")))
+            **(dict(kept_market=kept_market) if kept_market is not None else {})), separators=(",", ":")))
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 

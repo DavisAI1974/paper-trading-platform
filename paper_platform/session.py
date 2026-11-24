@@ -75,16 +75,58 @@ def _plain(value, name, left_out, depth=0):
     return _LEFT
 
 
-def _plain_attrs(obj, name, left_out, depth=0):
-    """Every attribute of `obj` by its own name (a dict's items by key), each as plain JSON."""
-    if obj is None or isinstance(obj, dict):
-        return _plain(obj, name, left_out, depth)
+def _own_names(obj):
+    """Every attribute name `obj` holds itself: its __dict__ and its slots."""
     names = list(getattr(obj, "__dict__", {}))
     for cls in type(obj).__mro__:
         slots = getattr(cls, "__slots__", ())
         names.extend([slots] if isinstance(slots, str) else slots)
+    return list(dict.fromkeys(names))
+
+
+def _walk_rest(obj, handled, target, path, left_out, named=None):
+    """Every attribute of `obj` not in `handled`, by its own name: written into `target`, or named in left_out.
+
+    `named` maps an attribute to the reason it is left out without being read. An attribute added to the object
+    later appears here with no change. A name that is already a key of `target` is written as `attribute:<name>`.
+    """
+    named = named or {}
+    for attr in _own_names(obj):
+        if attr in handled:
+            continue
+        where = f"{path}.{attr}"
+        if attr in named:
+            left_out.append(dict(name=where, reason=named[attr]))
+            continue
+        try:
+            item = getattr(obj, attr)
+        except Exception as error:
+            left_out.append(dict(name=where, reason=f"reading it raised {type(error).__name__}"))
+            continue
+        got = _plain(item, where, left_out)
+        if got is not _LEFT:
+            target[attr if attr not in target else f"attribute:{attr}"] = got
+
+
+# Wall-clock fields the replay stamps on a message: kept in the state, left out of its hash.
+WALL_CLOCK_FIELDS = ("received_by_replay_ns", "received_by_capture_ns")
+
+
+def _without_wall_clock(value):
+    """A copy of `value` with every key named in WALL_CLOCK_FIELDS removed, at any depth."""
+    if isinstance(value, dict):
+        return {k: _without_wall_clock(v) for k, v in value.items() if k not in WALL_CLOCK_FIELDS}
+    if isinstance(value, list):
+        return [_without_wall_clock(v) for v in value]
+    return value
+
+
+def _plain_attrs(obj, name, left_out, depth=0):
+    """Every attribute of `obj` by its own name (a dict's items by key), each as plain JSON."""
+    if obj is None or isinstance(obj, dict):
+        return _plain(obj, name, left_out, depth)
     out = {}
-    for attr in dict.fromkeys(names):
+    for attr in _own_names(obj):
         try:
             item = getattr(obj, attr)
         except Exception as error:
@@ -134,7 +176,7 @@ def digest(path):
         return hashlib.file_digest(f, "sha256").hexdigest()
 
 
-CLOSE_NOT_BUILT = "closing by answer is not built; the hold rule in force is the give-back exit"
+CLOSE_NOT_BUILT = "closing by answer is not built"
 
 
 class Session:
@@ -144,6 +186,9 @@ class Session:
     _mbo_counts = None
     decider_mbo_window_s = None
     decider_mbo_window_ns = None
+    # Rows of kind `answer` written for the answers file and for failures; touched only when answers are on.
+    answer_rows_taken = 0
+    answer_failure_rows = 0
 
     def __init__(
         self, data_root, trade_day, *, message_budget, output_budget, market_key="nymex-ng", on_event=None,
@@ -523,6 +568,7 @@ class Session:
                 if reason is not None:
                     row["reason"] = reason
                 written = self.write("answer", **row)
+                self.answer_rows_taken += 1
                 if reason is None:
                     self._apply_answer(answer, written)
             except Exception as error:
@@ -533,6 +579,7 @@ class Session:
 
     def _answer_failed(self, answer, tape_ns, what, error):
         text = f"{what}: {type(error).__name__}: {error}"
+        self.answer_failure_rows += 1  # one more row of kind answer, beyond the one a taken answer has
         try:
             self.write("answer", answer=answer if isinstance(answer, dict) else None, tape_received_ns=tape_ns,
                        applied=False, reason=text)
@@ -542,6 +589,7 @@ class Session:
     def _ask_decider(self, signal, e):
         """Journal the question, block on the decider, journal its answer. True only on a take."""
         sequence = signal["sequence"]
+        building = time.monotonic_ns()  # building the question is the decider's cost too: counted in waited_ns
         question = dict(sequence=sequence, rule=e["rule"], side=e.get("side"), trade_id=e["trade_id"],
                         tape_received_ns=e.get("received"), exchange_ns=e.get("exchange"),
                         journal=str(self.folder / "events.jsonl"))
@@ -554,7 +602,8 @@ class Session:
         if state is not None:
             try:
                 # The one serialization of the state: plain JSON (no NaN) or no state; the digest is of this text.
-                digest_ = hashlib.sha256(json.dumps(state, sort_keys=True, separators=(",", ":"),
+                json.dumps(state, allow_nan=False)  # the whole state must be plain JSON, wall-clock fields included
+                digest_ = hashlib.sha256(json.dumps(_without_wall_clock(state), sort_keys=True, separators=(",", ":"),
                                                     allow_nan=False).encode()).hexdigest()
             except Exception as error:
                 state, why = None, f"the state could not be written as JSON: {type(error).__name__}"
@@ -575,6 +624,7 @@ class Session:
                    trade_id=e["trade_id"], received=e.get("received"), exchange=e.get("exchange"), **extra)
         self.decided["asked"] += 1
         started = time.monotonic_ns()
+        self.waited_ns += started - building
         try:
             given = json.loads(json.dumps(self.decider.ask(question)))  # whatever it returns must be one JSON value
             failure = None
@@ -654,10 +704,15 @@ class Session:
                                  "checked against it at each file boundary (verify_queues)"))
             left_out.append(dict(name="paper.venues.*.engine", reason="each venue's native Nautilus matching-engine book "
                                  "and its queue positions are not read: the accessors are not confirmed read-only"))
+            left_out.append(dict(name="paper.venues.*.engine.fill_model/fee_model", reason="paper_execution.py builds the "
+                                 "matcher's FillModel() and MakerTakerFeeModel() itself, with defaults, from the "
+                                 "instrument definition: not read, and the fee and margin terms are cut (no trade cost "
+                                 "enters any output)"))
             mbo_window = self._mbo_window_state(t, left_out)
             conditions = self._conditions_state(t, left_out)
             state = dict(inputs=inputs, book=book, rules=rules, paper=paper, mbo_window=mbo_window,
-                         conditions=conditions, known_at_tape_ns=t["received"], left_out=left_out)
+                         conditions=conditions, known_at_tape_ns=t["received"],
+                         hash_excludes=list(WALL_CLOCK_FIELDS), left_out=left_out)
             return state, None
         except Exception as error:
             return None, f"reading the state raised {type(error).__name__}"
@@ -677,6 +732,11 @@ class Session:
         raw = message["raw"]
         if message.get("position_on_tape") != t["position"] or raw["ts_recv"] != t["received"]:
             return dict(detail="the session's last message is not the signal's own")
+        # Sequence numbers repeat within one exchange event; the tape reference (file sha256, record index) is unique.
+        if (message.get("source_sha256"), message.get("record_index")) != tuple(t.get("reference") or ()):
+            return dict(detail="the session's last message has a different tape reference from the signal's own",
+                        message_reference=[message.get("source_sha256"), message.get("record_index")],
+                        signal_reference=t.get("reference"))
         if book.last_sequence != raw["sequence"]:
             return dict(detail="the book's last exchange sequence differs from the signal's message",
                         book_last_sequence=book.last_sequence, message_sequence=raw["sequence"])
@@ -735,6 +795,12 @@ class Session:
                 return None
             from decimal import Decimal
             held = plan["instrument"]
+            for stamp in ("ts_event", "ts_init"):
+                when = held.get(stamp)
+                if isinstance(when, int) and when > t["exchange"]:
+                    left_out.append(dict(name="conditions.instrument", reason="the instrument definition is dated after "
+                                         f"the tick ({stamp} {when} > the tick's exchange time {t['exchange']})"))
+                    return None
             cost = ("maker_fee", "taker_fee", "margin_init", "margin_maint")
             left_out.append(dict(name="conditions.instrument." + "/".join(cost),
                                  reason="trade cost terms; no cost enters any output"))
@@ -817,27 +883,55 @@ class Session:
             return None
 
     def _rules_state(self, left_out):
-        """The rules' own working state as the engine holds it now, each attribute by its own name. Reads only."""
+        """The engine's own working state, every attribute by its own name (walked, so one added later appears).
+
+        `inputs`, `last` and `p` are written under `inputs`; everything else the engine holds is written here or
+        named in left_out with its path. Reads only.
+        """
         out = {}
-        for attr in ("cl", "unsided_print_rules", "open", "unmonitored", "managers", "responses", "ended", "run_id"):
-            try:
-                got = _plain(getattr(self.engine, attr), f"rules.{attr}", left_out)
-            except Exception as error:
-                left_out.append(dict(name=f"rules.{attr}", reason=f"reading it raised {type(error).__name__}"))
-                continue
-            if got is not _LEFT:
-                out[attr] = got
+        try:
+            _walk_rest(self.engine, ("inputs", "last", "p"), out, "rules", left_out)
+        except Exception as error:
+            left_out.append(dict(name="rules", reason=f"walking the engine raised {type(error).__name__}"))
         try:
             out["in_force"] = sorted(self.rules)
         except Exception as error:
             left_out.append(dict(name="rules.in_force", reason=f"reading it raised {type(error).__name__}"))
         return out
 
+    def _order_row(self, order_id, entry, active, where, take):
+        """One paper order as its venue holds it: the venue's own record of it, then the order's own fields. Reads only."""
+        row = dict(order_id=order_id, active=active)
+        here = f"{where}.orders.{order_id}"
+        take(row, "key", here + ".key", lambda: entry[1])
+        take(row, "action", here + ".action", lambda: entry[2])
+        take(row, "administrative_reason", here + ".administrative_reason", lambda: entry[3])
+        try:
+            from nautilus_trader.model.enums import (order_side_to_str, order_status_to_str, order_type_to_str,
+                                                     time_in_force_to_str)
+            from .nautilus_book import DBN_TO_NATIVE
+            order = entry[0]
+        except Exception as error:
+            take(row, "order", here, lambda: (_ for _ in ()).throw(error))
+            return row
+        take(row, "side", here + ".side", lambda: order_side_to_str(order.side))
+        take(row, "order_type", here + ".order_type", lambda: order_type_to_str(order.order_type))
+        take(row, "time_in_force", here + ".time_in_force", lambda: time_in_force_to_str(order.time_in_force))
+        take(row, "quantity", here + ".quantity", lambda: int(order.quantity))
+        take(row, "filled_quantity", here + ".filled_quantity", lambda: int(order.filled_qty))
+        take(row, "remaining_quantity", here + ".remaining_quantity", lambda: int(order.leaves_qty))
+        take(row, "price", here + ".price", lambda: order.price.raw // DBN_TO_NATIVE if order.has_price else None)
+        take(row, "status", here + ".status", lambda: order_status_to_str(order.status))
+        for stamp in ("ts_init", "ts_submitted", "ts_accepted", "ts_last", "ts_closed"):
+            take(row, stamp, f"{here}.{stamp}", lambda stamp=stamp: int(getattr(order, stamp)))
+        return row
+
     def _paper_state(self, left_out):
-        """The paper venues' state: inventory, working orders, holding, cash, peak, exit attempts, the exit policy.
+        """The paper side's state: every attribute of the execution and of each venue by its own name.
 
         Prices are the tape's integer units (a Nautilus price's raw value divided by DBN_TO_NATIVE, as the venue does).
-        A market order has no price: null. Every attribute is read in its own try. Reads only.
+        A market order has no price: null. Every attribute is read in its own try; what is not written is named in
+        left_out. Reads only.
         """
         out = {}
 
@@ -868,31 +962,32 @@ class Session:
             take(v, "peak", where + ".peak", lambda: dict(venue.peak))
             take(v, "exit_attempts", where + ".exit_attempts", lambda: dict(venue.exit_attempts))
             take(v, "holding", where + ".holding", lambda: sorted(venue.holding))
-            orders = {}
+            for ids in ("trader", "strategy", "account"):  # plain identifiers: written as their text
+                if hasattr(venue, ids):
+                    take(v, ids, f"{where}.{ids}", lambda ids=ids: str(getattr(venue, ids)))
+            orders, everything = {}, {}
             try:
-                from nautilus_trader.model.enums import order_side_to_str, order_status_to_str
-                from .nautilus_book import DBN_TO_NATIVE
+                active = {order_id for ids in venue.active_orders.values() for order_id in ids}
                 for key, ids in list(venue.active_orders.items()):
-                    rows = []
-                    for order_id in sorted(ids):
-                        o = {}
-                        order = venue.orders[order_id][0]
-                        o["order_id"] = order_id
-                        take(o, "side", f"{where}.active_orders.{order_id}.side", lambda: order_side_to_str(order.side))
-                        take(o, "quantity", f"{where}.active_orders.{order_id}.quantity", lambda: int(order.quantity))
-                        take(o, "remaining_quantity", f"{where}.active_orders.{order_id}.remaining_quantity",
-                             lambda: int(order.leaves_qty))
-                        take(o, "price", f"{where}.active_orders.{order_id}.price",
-                             lambda: order.price.raw // DBN_TO_NATIVE if order.has_price else None)
-                        take(o, "status", f"{where}.active_orders.{order_id}.status",
-                             lambda: order_status_to_str(order.status))
-                        rows.append(o)
-                    orders[str(key)] = rows
+                    orders[str(key)] = [self._order_row(i, venue.orders[i], True, where, take) for i in sorted(ids)]
+                for order_id, entry in list(venue.orders.items()):
+                    everything[str(order_id)] = self._order_row(order_id, entry, order_id in active, where, take)
             except Exception as error:
-                left_out.append(dict(name=where + ".active_orders", reason=f"reading it raised {type(error).__name__}"))
+                left_out.append(dict(name=where + ".orders", reason=f"reading it raised {type(error).__name__}"))
             v["active_orders"] = orders
+            v["orders"] = everything  # every order the venue has held, the closed ones too
+            self_named = dict(
+                (name, "a Nautilus object whose accessors are not confirmed read-only")
+                for name in ("clock", "bus", "cache", "engine"))
+            self_named["instrument"] = ("the Nautilus instrument object, which holds the fee and margin terms (cut: no "
+                                        "trade cost enters any output); the plan's definition is conditions.instrument")
+            _walk_rest(venue, ("inventory", "cash", "peak", "exit_attempts", "holding", "active_orders", "orders",
+                               "trader", "strategy", "account"), v, where, left_out, self_named)
             venues[rule] = v
         out["venues"] = venues
+        _walk_rest(ex, ("venues", "give_back", "also_before_profit"), out, "paper", left_out,
+                   dict(instrument="the Nautilus instrument object, which holds the fee and margin terms (cut: no trade "
+                                   "cost enters any output); the plan's definition is conditions.instrument"))
         return out
 
     def _lines_at(self, e):
@@ -957,6 +1052,9 @@ class Session:
         return dict(on=True, source=self.answers is not None,
                     taken=self.answers_taken, applied=self.answers_applied,
                     not_applied=self.answers_taken - self.answers_applied,
+                    # Rows of kind `answer` in the journal = rows_for_taken + failure_rows + decider asked. A failed
+                    # answer can write a second row, so failure_rows is counted apart: the rows can exceed taken + asked.
+                    rows_for_taken=self.answer_rows_taken, failure_rows=self.answer_failure_rows,
                     waiting_at_stop=self.answers.waiting() if self.answers is not None else 0,
                     sha256=self.answers_hash.hexdigest(),
                     decider=dict(on=self.decider is not None, **self.decided, waited_ns=self.waited_ns,

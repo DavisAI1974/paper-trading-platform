@@ -178,7 +178,7 @@ def test_a_close_answer_is_always_journaled_not_applied_with_the_reason():
         rows = []
         bare_session(Handing(close), rows, **plug)._take_answers(5)
         assert len(rows) == 1 and rows[0]["applied"] is False
-        assert rows[0]["reason"] == "closing by answer is not built; the hold rule in force is the give-back exit"
+        assert rows[0]["reason"] == "closing by answer is not built"
 
 
 def test_malformed_key_marks_an_answer_whatever_its_value():
@@ -406,7 +406,7 @@ class _Raises:
 def _stand_last_message(position=11, received=5, sequence=5, order_id=99, new=None):
     """A stand-in for the session's last message: only the keys the book guard reads."""
     return dict(position_on_tape=position, raw=dict(ts_recv=received, sequence=sequence, order_id=order_id),
-                order_change=dict(new=new))
+                order_change=dict(new=new), source_sha256="s", record_index=position)
 
 
 def _state_session(last, inputs, p=None, feed=None, message=None):
@@ -474,7 +474,7 @@ def test_state_book_reads_both_sides_best_outward_with_queues_from_a_stand_in_bo
     book = SimpleNamespace(last_sequence=5, orders={}, sides={
         b"B": SimpleNamespace(prices=[10, 20, 30], lines={10: line((1, 1)), 20: line((2, 2), (3, 5)), 30: line((4, 4))}),
         b"A": SimpleNamespace(prices=[40, 50], lines={40: line((5, 1)), 50: line((6, 2))})})
-    tick = dict(position=11, received=5, bid=30, ask=40)
+    tick = dict(position=11, received=5, bid=30, ask=40, reference=("s", 11))
     s = _state_session(tick, _Stand(a=1), feed=SimpleNamespace(book=book))
     state, _ = s._state_at(dict(position=11, received=5))
     assert [x["price"] for x in state["book"]["bid"]] == [30, 20, 10]
@@ -633,7 +633,7 @@ def test_the_book_must_be_the_session_readers_book_at_the_signals_own_message():
     line = lambda: SimpleNamespace(size=1, orders={1: SimpleNamespace(id=1, size=1)})
     held = SimpleNamespace(price=30, size=4, side=b"B", entered_pos=8)  # a stand-in order the stand-in book holds
     sides = {b"B": SimpleNamespace(prices=[30], lines={30: line()}), b"A": SimpleNamespace(prices=[40], lines={40: line()})}
-    tick = dict(position=11, received=5, bid=30, ask=40)
+    tick = dict(position=11, received=5, bid=30, ask=40, reference=("s", 11))
 
     def ask(book, message):
         s = _state_session(tick, _Stand(a=1), feed=SimpleNamespace(book=book), message=message)
@@ -657,6 +657,13 @@ def test_the_book_must_be_the_session_readers_book_at_the_signals_own_message():
     assert ask(SimpleNamespace(last_sequence=5, orders={7: held}, sides=sides), gone)[0] is None
     # the session's last message is not the signal's own
     assert ask(SimpleNamespace(last_sequence=5, orders={}, sides=sides), _stand_last_message(position=10))[0] is None
+    # same position, receive time, sequence and order change, but another tape reference (a later message of the same
+    # exchange event): refused
+    later = dict(mine, record_index=12)
+    book, left = ask(SimpleNamespace(last_sequence=5, orders={7: held}, sides=sides), later)
+    assert book is None and "tape reference" in left[0]["detail"]
+    assert dict(mine, source_sha256="other") and ask(SimpleNamespace(last_sequence=5, orders={7: held}, sides=sides),
+                                                     dict(mine, source_sha256="other"))[0] is None
 
 
 def test_conditions_hold_each_named_item_and_no_label():
@@ -744,11 +751,156 @@ def test_the_market_series_writers_with_stand_in_messages(tmp_path):
     for m in (stand(1, 30, 40), stand(2, 30, 41),  # before the stretch: read, not written
               stand(10, 30, 41), stand(11, 30, 41, "T", "A", 41, 1), stand(12, 31, 41), stand(13, None, 41),
               stand(14, 31, 41, period="vendor snapshot"), stand(15, 31, 41, "T", "N", 31, 5)):
-        series.add(m)
+        series.add(m, m["raw"]["ts_recv"] >= 10)
     series.close()
     quotes = [json.loads(x) for x in (tmp_path / "quotes.jsonl").read_text().splitlines()]
     prints = [json.loads(x) for x in (tmp_path / "prints.jsonl").read_text().splitlines()]
     assert [q["tape_received_ns"] for q in quotes] == [10, 12, 13, 15] and quotes[2]["bid"] is None  # 15: the bid is back after 13 had none; the snapshot at 14 is not written or read
     assert [(p["tape_received_ns"], p["price"], p["size"], p["aggressor"]) for p in prints] == [(11, 41, 1, "A"), (15, 31, 5, "N")]
     assert series.count == dict(quotes=4, prints=2)
+    done = series.finish(10, 20)
+    from paper_platform.session import digest
+    assert done["sha256"]["quotes.jsonl"] == digest(tmp_path / "quotes.jsonl") and done["failure"] is None
+    meta = json.loads((tmp_path / "market-series.json").read_text())
+    assert meta["counts"] == dict(quotes=4, prints=2) and meta["stretch_tape_ns"] == [10, 20]
+    assert (meta["first_tape_received_ns"], meta["last_tape_received_ns"]) == (10, 15)
+    assert meta["sha256"] == {k: v for k, v in done["sha256"].items() if k != "market-series.json"}
     assert not any("mid" in k for q in quotes for k in q)
+
+
+def test_a_failing_series_write_stops_the_series_not_the_trial(tmp_path):
+    from paper_platform.trial import MarketSeries, decided
+    m = dict(source_sha256="s", record_index=1, period="trade day", best_bid=1, best_ask=2, in_session=True,
+             raw=dict(ts_recv=5, ts_event=4, action="T", side="B", price=1, size=1))
+    series = MarketSeries(tmp_path, 0)
+    series.add(m, True)
+    series.quotes.close()  # the next write raises ValueError
+    series.add(dict(m, best_bid=3), True)
+    series.add(dict(m, best_bid=4), True)  # nothing more is tried; nothing raises
+    series.close()
+    done = series.finish(0, 10)
+    assert "ValueError" in done["failure"] and done["quotes"] == 1
+    assert json.loads((tmp_path / "market-series.json").read_text())["failure"] == done["failure"]
+    # the boundary is the session's own: receive clock after a paced start, exchange clock (in_session) always
+    assert decided(m, 10, 0) and not decided(m, 10, 1) and not decided(dict(m, in_session=False), 0, 0)
+
+
+# ---- fixes of the third review: nothing the run holds is left unnamed; the state's hash; counts; building time.
+def test_an_attribute_the_code_has_never_heard_of_is_in_state_or_in_left_out():
+    from types import SimpleNamespace
+    s = _state_session(dict(position=11, received=5), _Stand(a=1))
+    s.engine = SimpleNamespace(last=s.engine.last, p=None, inputs=_Stand(a=1), cl=_Stand(), rules={"CL01": {"id": 1}},
+                               cx=[{"id": "CX1"}], brand_new=dict(x=1), brand_new_blob=b"x", brand_new_obj=len)
+    venue = _Stand(inventory={}, cash={}, peak={}, exit_attempts={}, holding=set(), active_orders={"t1": {"o1"}},
+                   orders={"o1": (_Stand(), "t1", "open", None), "o0": (_Stand(), "t0", "close", "reason")},
+                   book_quote=dict(bid=1), reference=["sha", 3], received=5, known_received_ns=5, venue_new=[1, 2],
+                   venue_new_blob=b"y", clock=_Stand(), instrument=_Stand())
+    s.execution = _Stand(give_back=None, also_before_profit=False, venues={"CL01": venue}, policies={"CL01": {"legs": 1}},
+                         followers={"CL01": []}, exec_new=7, exec_new_blob=b"z", instrument=_Stand())
+    s.rules = {"CL01": {}}
+    state, why = s._state_at(dict(position=11, received=5))
+    assert why is None
+    r = state["rules"]
+    assert r["rules"] == {"CL01": {"id": 1}} and r["cx"] == [{"id": "CX1"}] and r["brand_new"] == dict(x=1)
+    names = {x["name"] for x in state["left_out"]}
+    assert {"rules.brand_new_blob", "rules.brand_new_obj", "paper.exec_new_blob", "paper.instrument",
+            "paper.venues.CL01.venue_new_blob", "paper.venues.CL01.clock", "paper.venues.CL01.instrument",
+            "paper.venues.*.engine.fill_model/fee_model"} <= names
+    p = state["paper"]
+    assert p["exec_new"] == 7 and p["policies"] == {"CL01": {"legs": 1}} and p["followers"] == {"CL01": []}
+    v = p["venues"]["CL01"]
+    assert v["venue_new"] == [1, 2] and v["book_quote"] == dict(bid=1) and v["reference"] == ["sha", 3]
+    assert v["received"] == 5 and v["known_received_ns"] == 5
+    assert set(v["orders"]) == {"o0", "o1"} and v["orders"]["o0"]["active"] is False and v["orders"]["o0"]["action"] == "close"
+    assert v["orders"]["o0"]["administrative_reason"] == "reason" and v["orders"]["o1"]["active"] is True
+    # every attribute the stand-ins hold is written or named
+    for attr in vars(s.engine):
+        assert attr in ("inputs", "last", "p") or attr in r or any(n == f"rules.{attr}" for n in names), attr
+    for attr in vars(s.execution):
+        assert attr in ("give_back",) or attr in p or any(n == f"paper.{attr}" for n in names), attr
+    for attr in vars(venue):
+        assert attr in v or any(n == f"paper.venues.CL01.{attr}" for n in names), attr
+    json.dumps(state, allow_nan=False)
+
+
+def test_the_instrument_definition_dated_after_the_tick_is_left_out_and_named():
+    from root.calendar import trade_day_bounds
+    from datetime import date
+    opens, halts = trade_day_bounds(date(2023, 10, 2))
+    tick = dict(position=11, received=opens + 5, exchange=opens + 4, settlement=False)
+    s = _state_session(tick, _Stand(a=1, start=1, end=2, end_of_day=3))
+    s.trade_day, s.paced_from_ns = "2023-10-02", None
+    s.market = dict(price_scale=10**9, price_unit="u", contract_size=1, contract_unit="c")
+    base = dict(raw_symbol="STAND", price_increment="0.001", maker_fee="0", taker_fee="0", margin_init="0", margin_maint="0")
+    for stamped, expect_in in ((dict(ts_event=opens + 4, ts_init=opens), True), (dict(ts_event=opens + 5), False),
+                               (dict(ts_event=opens, ts_init=opens + 9), False)):
+        s.initial = dict(execution_plan=dict(databento_instrument_id=1, instrument=dict(base, **stamped)))
+        state, _ = s._state_at(dict(position=11, received=opens + 5))
+        got = state["conditions"].get("instrument")
+        assert (got is not None) == expect_in
+        if not expect_in:
+            assert any(x["name"] == "conditions.instrument" and "dated after" in x["reason"] for x in state["left_out"])
+
+
+def test_the_state_hash_ignores_the_wall_clock_fields_and_names_them():
+    from paper_platform.session import WALL_CLOCK_FIELDS, _without_wall_clock
+    state = dict(hash_excludes=list(WALL_CLOCK_FIELDS),
+                 mbo_window=dict(messages=[dict(position_on_tape=1, received_by_replay_ns=111)]), known_at_tape_ns=5)
+    other = json.loads(json.dumps(state))
+    other["mbo_window"]["messages"][0]["received_by_replay_ns"] = 222
+    assert state != other and _without_wall_clock(state) == _without_wall_clock(other)
+    assert state["mbo_window"]["messages"][0]["received_by_replay_ns"] == 111  # the state itself keeps the field
+    # through the gate: two questions whose states differ only in that field carry the same state_sha256
+    from types import SimpleNamespace
+    shas = []
+    for wall in (111, 222):
+        rows = []
+        s = gate_session(SimpleNamespace(ask=lambda q: dict(action="skip", by="x", asked_at_sequence=q["sequence"])), rows)
+        s._state_at = lambda e, wall=wall: (dict(book=None, inputs=dict(strategy_inputs={}, tick={}), hash_excludes=list(
+            WALL_CLOCK_FIELDS), mbo_window=dict(count=1, messages=[dict(received_by_replay_ns=wall)])), None)
+        s.record(dict(action="open", rule="CL01", side="buy", trade_id="t", position=11, received=5, exchange=4))
+        shas.append(rows[1]["state_sha256"])
+    assert shas[0] == shas[1]
+    assert "hash_excludes" in _state_session(dict(position=11, received=5), _Stand(a=1))._state_at(
+        dict(position=11, received=5))[0]
+
+
+def test_the_time_spent_building_the_question_is_taken_out_of_the_runs_clock_too():
+    import time as _time
+    from types import SimpleNamespace
+    rows = []
+    s = gate_session(SimpleNamespace(ask=lambda q: dict(action="skip", by="x", asked_at_sequence=q["sequence"])), rows)
+
+    def slow(e):
+        _time.sleep(0.05)
+        return None, "stand-in"
+
+    s._state_at = slow
+    s.record(dict(action="open", rule="CL01", side="buy", trade_id="t", position=11, received=5, exchange=4))
+    assert s.waited_ns >= 50_000_000 and rows[2]["latency_ns"] < s.waited_ns
+
+
+def test_the_receipts_answer_rows_add_up_with_failure_rows_counted_apart():
+    import hashlib
+    rows = []
+    s = bare_session(None, rows, decider=None, run="r", decided=dict(asked=0, take=0, skip=0, none=0), waited_ns=0,
+                     decider_hash=hashlib.sha256(), decider_mbo_window_s=None)
+    s.answers = Handing(dict(id="a1", action="rule_off", rule="CL01", by="x", packet=None, asked_at_sequence=None),
+                        dict(id="a2", action="rule_off", rule="CL02", by="x", packet=None, asked_at_sequence=None))
+    s.answers.waiting = lambda: 0
+    s.rules = {"CL01": {}, "CL02": {}}
+    s._orders_for = lambda rule: True
+    original = s._apply_answer
+
+    def break_second(answer, row):
+        if answer["id"] == "a2":
+            raise RuntimeError("boom")
+        original(answer, row)
+
+    s._apply_answer = break_second
+    s._take_answers(5)
+    receipt = s.answers_receipt()
+    answer_rows = [r for r in rows if r["kind"] == "answer"]
+    assert receipt["taken"] == 2 and receipt["applied"] == 1 and receipt["failure_rows"] == 1
+    assert receipt["rows_for_taken"] == 2 and len(answer_rows) == receipt["rows_for_taken"] + receipt["failure_rows"] == 3
+    assert len(answer_rows) > receipt["taken"] + receipt["decider"]["asked"]  # the numbers differ, and now say why
