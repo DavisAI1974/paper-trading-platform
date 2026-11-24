@@ -12,6 +12,13 @@ there (`Session(paced_from_ns=...)`); the stretch ends at the first tape message
 timers due before that instant are fired, and what is still open is closed by the session's own stop, as
 administrative closes that are not trade data.
 
+With `--answers <file>` the trial takes in answers from outside (answers.py). Such a file is written before
+the trial and is an input like the plan: every line is one answer and carries `not_before_tape_ns`, the tape
+time before which it must not be taken (a file without it is refused). The trial hands an answer over at the
+first step whose message is at or after that time, in the order of the file, and the session journals it as a
+row of kind `answer`. `--answer-close` allows a `close` answer to close a trade; without it a close answer is
+journaled and not applied. Without `--answers` nothing here changes.
+
 It writes into a scratch copy and nowhere else: the journal, the receipt and one line for each trade
 (`trades.jsonl`) are kept only when `--keep` names a folder. No network, no order to any venue, no notice.
 
@@ -32,6 +39,7 @@ import tempfile
 
 from root.calendar import clock_days_needed, trade_day_bounds
 
+from .answers import TimedAnswers
 from .market import replay_market
 from .session import Session
 
@@ -136,10 +144,20 @@ def main():
     parser.add_argument("--from-minute", type=float, default=0,
                         help="minutes after the trade day's 6 pm Eastern open at which the stretch begins")
     parser.add_argument("--minutes", type=float, required=True, help="minutes of tape in the stretch")
+    parser.add_argument("--answers", type=Path,
+                        help="a file of answers written before the trial, each with not_before_tape_ns")
+    parser.add_argument("--answer-close", action="store_true",
+                        help="let a close answer close a trade (the hold rule in force is the give-back exit)")
     parser.add_argument("--keep", type=Path, help="a folder to keep the journal, the receipt and the trade lines in")
     args = parser.parse_args()
     if args.from_minute < 0 or args.minutes <= 0:
         parser.error("the stretch begins at or after the open and holds a positive number of minutes")
+    if args.answer_close and not args.answers:
+        parser.error("--answer-close needs --answers")
+    if args.answers:
+        refusal = TimedAnswers.check(args.answers)
+        if refusal:
+            parser.error("the answers file is refused: " + refusal)
     opens, halts = trade_day_bounds(args.trade_day)
     begin = opens + round(args.from_minute * 60 * 1_000_000_000)
     end = begin + round(args.minutes * 60 * 1_000_000_000)
@@ -153,7 +171,9 @@ def main():
                       json.loads((root / replay_market(args.market)["archive"] / "MANIFEST.json").read_text())["files"])
         session = Session(root, args.trade_day, message_budget=records + 1, output_budget=10 * records + 1,
                           market_key=args.market, execution_plan=plan, plan_source=str(args.plan),
-                          paced_from_ns=begin if args.from_minute else None)
+                          paced_from_ns=begin if args.from_minute else None,
+                          answers=TimedAnswers(args.answers) if args.answers else None,
+                          answer_close=args.answer_close)
         try:
             # Peek at each raw record's receive time, as the paced runner does, and admit it with step().
             for stored in session.feed.week:
@@ -180,6 +200,8 @@ def main():
             kept.mkdir(parents=True)
             for name in ("events.jsonl", "receipt.json", "start.json"):
                 shutil.copyfile(session.folder / name, kept / name)
+            if args.answers:
+                shutil.copyfile(args.answers, kept / "answers-input.jsonl")
             with (kept / "trades.jsonl").open("w", encoding="utf8", newline="\n") as out:
                 for line in lines:
                     out.write(json.dumps(line, separators=(",", ":")) + "\n")

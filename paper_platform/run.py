@@ -17,6 +17,7 @@ import time
 from urllib.parse import urlsplit
 
 import requests
+from .answers import FileAnswers
 from .api import wire
 from .causal_gate import PreflightDeadline
 from .journal_publication import GitJournal
@@ -246,7 +247,11 @@ def main():
     # tick. Every order and fill is still queued for a push at once, and a push carries the journal up to
     # the newest one waiting. Without this the first run test covered 3 seconds of tape in 11 minutes.
     p.add_argument("--keep-tape-pace", action="store_true")
+    # A local file that something else appends answers to while the run goes (answers.py). Switched off without it.
+    p.add_argument("--answers", type=Path)
     args = p.parse_args()
+    if args.answers and args.replay_receipt:
+        p.error("a receipt replay takes no answers: it follows the original run's recorded rows")
     if args.stop_after_minutes is not None and args.stop_after_minutes <= 0:
         p.error("the stop of a short test must be a positive number of minutes")
     if args.start_after_minutes is not None and (
@@ -322,6 +327,7 @@ def main():
             started=started, captured=args.capture or args.replay_capture, capture_connection=args.capture_connection,
             replay_capture=args.replay_capture is not None, capture_commit=args.capture_commit, replay_receipt=receipt,
             execution_plan=execution_plan, plan_source=plan_source, paced_from_ns=paced_from,
+            answers=FileAnswers(args.answers) if args.answers else None,
         )
         pub = Publication(s, url, push_url)
         pending = deque()
