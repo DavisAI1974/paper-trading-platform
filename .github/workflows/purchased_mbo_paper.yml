@@ -37,6 +37,10 @@ on:
         description: Maximum ordinary journal events
         required: true
         type: string
+      stop_after_minutes:
+        description: For a short test, stop this many minutes after the first paced record. Empty for a full run
+        type: string
+        required: false
       phone_page:
         description: Send the events to the phone page. Uncheck to run with the git record and the phone notices only
         type: boolean
@@ -130,6 +134,7 @@ jobs:
           MESSAGE_BUDGET: ${{ inputs.message_budget }}
           EVENT_BUDGET: ${{ inputs.event_budget }}
           PHONE_PAGE: ${{ inputs.phone_page }}
+          STOP_AFTER_MINUTES: ${{ inputs.stop_after_minutes }}
           MARKETS_DATA_TOKEN: ${{ secrets.MARKETS_DATA_TOKEN }}
           PAPER_RELAY_URL: ${{ vars.PAPER_RELAY_URL }}
           PAPER_RELAY_TOKEN: ${{ secrets.PAPER_RELAY_TOKEN }}
@@ -148,5 +153,8 @@ jobs:
           # A receipt replay runs the earlier commit's code, which has no such switch.
           if [[ "$PHONE_PAGE" == false && -z "$ORIGINAL_RUN" ]]; then
             plan_args+=(--no-phone-page)
+          fi
+          if [[ -n "$STOP_AFTER_MINUTES" && -z "$ORIGINAL_RUN" ]]; then
+            plan_args+=(--stop-after-minutes "$STOP_AFTER_MINUTES")
           fi
           exec python -B -m paper_platform.run "${capture_args[@]}" "${plan_args[@]}" --greg-go --data "$GITHUB_WORKSPACE/purchased-inputs" --market "$MARKET" --trade-day "$TRADE_DAY" --message-budget "$MESSAGE_BUDGET" --event-budget "$EVENT_BUDGET"

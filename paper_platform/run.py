@@ -217,7 +217,12 @@ def main():
     # Greg's switch for a run without the phone page: the journal still goes to markets-data and the
     # phone notices still go. Without the switch a missing page address refuses the start, as before.
     p.add_argument("--no-phone-page", action="store_true")
+    # A short test: the run stops itself this many minutes after the first paced record of the trade day,
+    # by the same path as a manual stop (positions flattened, receipt written, the phone told).
+    p.add_argument("--stop-after-minutes", type=float)
     args = p.parse_args()
+    if args.stop_after_minutes is not None and args.stop_after_minutes <= 0:
+        p.error("the stop of a short test must be a positive number of minutes")
     if args.replay_receipt and not args.replay_capture:
         p.error("select the stored live capture for receipt-based replay")
     if args.replay_capture and args.capture_connection is not None:
@@ -300,6 +305,12 @@ def main():
         writer.start()
         journal = writer
         stopped = threading.Event()
+        test_over = threading.Event()
+
+        def end_short_test():
+            test_over.set()
+            stopped.set()
+
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, lambda *_: stopped.set())
         opens, halts = trade_day_bounds(args.trade_day)
@@ -349,7 +360,8 @@ def main():
 
         while s.state == "active":
             if stopped.is_set():
-                why = "run stopped"
+                why = (f"stopped {args.stop_after_minutes:g} minutes after the first paced record, as set at the start"
+                       if test_over.is_set() else "run stopped")
                 break
             if s.due():
                 why = s.due()
@@ -369,6 +381,10 @@ def main():
                     received = int(r["ts_recv"])
                     if base is None:
                         base = time.monotonic_ns() - received
+                        if args.stop_after_minutes is not None:
+                            short_test = threading.Timer(args.stop_after_minutes * 60, end_short_test)
+                            short_test.daemon = True
+                            short_test.start()
                     pace_to_record(s, received, base, stopped, deliver=deliver)
                 elif base is not None and not s.engine.ended and i >= f.vendor_snapshot and int(r["ts_event"]) >= halts:
                     pace_to_record(s, int(r["ts_recv"]), base, stopped, deliver=deliver)
