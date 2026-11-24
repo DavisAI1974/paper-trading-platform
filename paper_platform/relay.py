@@ -12,7 +12,7 @@ import sqlite3
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .rulebook import catalogue
 from .market import markets
@@ -23,6 +23,10 @@ from .views import card, page, trade_card
 class Packet(BaseModel):
     event: dict
     status: dict
+
+
+class JournalBatch(BaseModel):
+    packets: list[Packet] = Field(min_length=1, max_length=128)
 
 
 def relay():
@@ -68,10 +72,11 @@ def relay():
     def health():
         return {"ready": True}
 
-    @app.post("/ingest")
-    def ingest(packet: Packet, authorization: str = Header(default="")):
+    def authorize_writer(authorization: str = Header(default="")):
         if not secrets.compare_digest(authorization.encode(), ("Bearer " + writer).encode()):
             raise HTTPException(403)
+
+    def append_packet(db, packet):
         event, status = packet.event, packet.status
         run = event.get("run")
         seq = event.get("sequence")
@@ -87,23 +92,35 @@ def relay():
         ):
             raise HTTPException(422, "invalid session or sequence")
         body = json.dumps(event, sort_keys=True, separators=(",", ":"))
+        old = db.execute("SELECT body FROM events WHERE run=? AND sequence=?", (run, seq)).fetchone()
+        if old:
+            if old[0] != body:
+                raise HTTPException(409, "sequence collision")
+            return {"next": seq + 1}
+        latest = db.execute("SELECT MAX(sequence) FROM events WHERE run=?", (run,)).fetchone()[0]
+        expected = 0 if latest is None else latest + 1
+        if expected != seq:
+            raise HTTPException(409, detail={"next": expected})
+        db.execute("INSERT INTO events VALUES(?,?,?)", (run, seq, body))
+        db.execute(
+            "INSERT INTO sessions VALUES(?,?,?) ON CONFLICT(run) DO UPDATE SET body=excluded.body",
+            (run, json.dumps(status), str(event["recorded_ns"])),
+        )
+        return {"next": seq + 1}
+
+    @app.post("/ingest", dependencies=[Depends(authorize_writer)])
+    def ingest(packet: Packet):
         with connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            old = db.execute("SELECT body FROM events WHERE run=? AND sequence=?", (run, seq)).fetchone()
-            if old:
-                if old[0] != body:
-                    raise HTTPException(409, "sequence collision")
-                return {"next": seq + 1}
-            latest = db.execute("SELECT MAX(sequence) FROM events WHERE run=?", (run,)).fetchone()[0]
-            expected = 0 if latest is None else latest + 1
-            if expected != seq:
-                raise HTTPException(409, detail={"next": expected})
-            db.execute("INSERT INTO events VALUES(?,?,?)", (run, seq, body))
-            db.execute(
-                "INSERT INTO sessions VALUES(?,?,?) ON CONFLICT(run) DO UPDATE SET body=excluded.body",
-                (run, json.dumps(status), str(event["recorded_ns"])),
-            )
-        return {"next": seq + 1}
+            return append_packet(db, packet)
+
+    @app.post("/ingest/batch", dependencies=[Depends(authorize_writer)])
+    def ingest_batch(batch: JournalBatch):
+        with connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            for packet in batch.packets:
+                result = append_packet(db, packet)
+            return result
 
     def session_state(db, run, market):
         if run:
