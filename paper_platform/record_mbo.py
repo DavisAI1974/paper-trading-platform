@@ -17,7 +17,7 @@ import zstandard
 from root.calendar import clock_days_needed, week_sunday
 from root.tape import TapeFolder
 
-from .capture import capture_writer
+from .capture import CaptureFailure, capture_writer
 from .market import replay_market
 from .run import notify
 from .session import LIMIT_SECONDS, git
@@ -125,7 +125,7 @@ def live(trade_day, profile, sink):
     client.add_stream(sink, exception_callback=sink.failed)
     def control(record):
         if isinstance(record, ErrorMsg):
-            sink.failed(RuntimeError("Databento reported a feed error"))
+            sink.failed(CaptureFailure(f"Databento feed error {int(record.code)}"))
         elif isinstance(record, SystemMsg) and record.code == SystemCode.REPLAY_COMPLETED:
             with sink.writer.db:
                 sink.writer.db.execute("INSERT OR IGNORE INTO live_starts VALUES(?,?)",
@@ -140,11 +140,13 @@ def live(trade_day, profile, sink):
         client.start()
         while not sink.done.wait(0.1):
             if not client.is_connected():
-                raise ConnectionError("live feed disconnected; restart with the same capture week")
+                raise CaptureFailure("live feed disconnected")
             if time.monotonic() >= sink.deadline:
                 sink.stop("clock limit")
         if sink.error is not None:
-            raise RuntimeError("live DBN write failed") from sink.error
+            if isinstance(sink.error, CaptureFailure):
+                raise sink.error
+            raise CaptureFailure("live DBN write failed") from sink.error
     finally:
         if connected:
             try:
@@ -160,6 +162,7 @@ def main():
     parser.add_argument("--trade-day", type=date.fromisoformat, required=True)
     parser.add_argument("--source", choices=("purchased", "live"), required=True)
     parser.add_argument("--message-budget", type=int, required=True)
+    parser.add_argument("--ready-file", type=Path)
     parser.add_argument("--greg-go", action="store_true")
     args = parser.parse_args()
     if not args.greg_go or args.message_budget <= 0:
@@ -182,12 +185,19 @@ def main():
             sink = Sink(writer, args.message_budget, started)
             for sig in (signal.SIGTERM, signal.SIGINT):
                 signal.signal(sig, lambda *_: sink.stop("capture stopped"))
+            if args.ready_file:
+                pending = args.ready_file.with_suffix(".pending")
+                pending.write_text(str(writer.connection_id), encoding="ascii")
+                pending.replace(args.ready_file)
             if args.source == "purchased":
                 purchased(data_root, args.trade_day, profile, sink)
             else:
                 live(args.trade_day, profile, sink)
             writer.status = sink.reason or "end of purchased input"
         outcome = writer.status
+    except CaptureFailure as exc:
+        outcome = str(exc)
+        raise
     finally:
         notify(outcome, f"{profile['id']}/{sunday}/{args.source}", activity="MBO capture")
 
