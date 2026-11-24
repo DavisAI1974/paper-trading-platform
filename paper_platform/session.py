@@ -81,6 +81,7 @@ class Session:
         self.first_live_decision_cursor = None
         self.captured = captured is not None
         if self.captured:
+            self.capture_frame_hash = hashlib.sha256()
             from .capture import CapturedFeed, capture_preflight
             path = Path(captured).resolve()
             relative = path.relative_to(self.data_root / "paper-trading" / "captures")
@@ -256,6 +257,8 @@ class Session:
                             return None
                 self.cursor = message["cursor"]
                 self.last = message
+                if self.captured:
+                    self.capture_frame_hash.update(bytes.fromhex(message["source_sha256"]))
                 if self.execution:
                     self.execution.market(message)
                 self.receives.write(struct.pack("<Q", message["received_by_capture_ns" if self.captured else "received_by_replay_ns"]))
@@ -337,6 +340,8 @@ class Session:
                     remaining_paper_inventory=self._paper_inventory(), last_source=self.last_source(),
                     capture_end=self.capture_end,
                 )
+                if self.captured:
+                    receipt["capture_frame_hashes_sha256"] = self.capture_frame_hash.hexdigest()
                 (self.folder / "receipt.json").write_text(json.dumps(receipt, indent=2), encoding="utf8")
 
             return True

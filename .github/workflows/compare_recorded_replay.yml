@@ -1,0 +1,46 @@
+name: Compare live and replay strategy journals
+on:
+  workflow_dispatch:
+    inputs:
+      live_run:
+        description: Original live run ID in markets-data
+        required: true
+        type: string
+      replay_run:
+        description: Completed receipt-based replay run ID
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    if: github.actor == 'DavisAI1974' && github.triggering_actor == 'DavisAI1974'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      LIVE_RUN: ${{ inputs.live_run }}
+      REPLAY_RUN: ${{ inputs.replay_run }}
+    steps:
+      - name: Select the two published journals
+        run: |
+          [[ "$LIVE_RUN" =~ ^[0-9a-f]{32}$ && "$REPLAY_RUN" =~ ^[0-9a-f]{32}$ && "$LIVE_RUN" != "$REPLAY_RUN" ]]
+      - name: Read the selected platform commit
+        run: |
+          git init --quiet .
+          git remote add origin https://github.com/DavisAI1974/paper-trading-platform.git
+          git fetch --depth=1 origin "$GITHUB_SHA"
+          git checkout --quiet --detach FETCH_HEAD
+      - uses: ./.github/actions/markets-data
+        with:
+          path: original
+          ref: refs/heads/paper-runs/${{ inputs.live_run }}
+          paths: paper-trading/${{ inputs.live_run }}
+      - uses: ./.github/actions/markets-data
+        with:
+          path: replay
+          ref: refs/heads/paper-runs/${{ inputs.replay_run }}
+          paths: paper-trading/${{ inputs.replay_run }}
+      - name: Compare the published strategy decisions in order
+        run: python -m paper_platform.replay_comparison "original/paper-trading/$LIVE_RUN" "replay/paper-trading/$REPLAY_RUN"
