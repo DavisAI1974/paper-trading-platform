@@ -9,6 +9,7 @@ from nautilus_trader.common.component import MessageBus, TestClock
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.model.data import BookOrder, OrderBookDelta, TradeTick
 from nautilus_trader.model.enums import AccountType, AggressorSide, BookAction, BookType, OmsType, OrderSide, TimeInForce
+from nautilus_trader.model.enums import liquidity_side_to_str, order_status_to_str
 from nautilus_trader.model.events import OrderFilled, OrderSubmitted
 from nautilus_trader.model.identifiers import AccountId, ClientOrderId, StrategyId, TradeId, TraderId
 from nautilus_trader.model.instruments import FuturesContract
@@ -53,14 +54,15 @@ class RuleVenue:
                 del self.active_orders[key]
         data = dict(rule=self.rule, trade_id=key, order_id=str(event.client_order_id),
                     action=action, received=self.received, reference=self.reference,
-                    trade_data=not administrative, execution_event=type(event).__name__)
+                    trade_data=not administrative, execution_event=type(event).__name__,
+                    order_status=order_status_to_str(order.status), remaining_quantity=int(order.leaves_qty))
         if isinstance(event, OrderFilled):
             qty = int(event.last_qty)
             self.inventory[key] += qty if event.order_side == OrderSide.BUY else -qty
             self.emit("fill", **data, fill_id=str(event.trade_id), quantity=qty,
                       fill_price=event.last_px.raw // DBN_TO_NATIVE,
                       side="buy" if event.order_side == OrderSide.BUY else "sell",
-                      liquidity=event.liquidity_side.name)
+                      liquidity=liquidity_side_to_str(event.liquidity_side))
         else:
             self.emit("order status", **data, reason=str(getattr(event, "reason", type(event).__name__)))
 

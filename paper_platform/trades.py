@@ -27,8 +27,8 @@ def trade_rows(db, run, rule, *, trade_id=None, through=None):
         ) FROM events a
         LEFT JOIN events b ON b.run=a.run
           AND json_extract(b.body,'$.kind')='paper order'
-          AND json_extract(b.body,'$.trade_id')=coalesce(json_extract(a.body,'$.source_trade_id'),
-                                                        json_extract(a.body,'$.trade_id'))
+          AND json_extract(b.body,'$.trade_id')=CASE json_extract(a.body,'$.action')
+              WHEN 'exit' THEN json_extract(a.body,'$.source_trade_id') ELSE json_extract(a.body,'$.trade_id') END
           AND json_extract(b.body,'$.action')=CASE json_extract(a.body,'$.action')
                                               WHEN 'exit' THEN 'open' ELSE 'close' END
           AND (? IS NULL OR b.sequence<=?)
@@ -53,6 +53,18 @@ def trade_rows(db, run, rule, *, trade_id=None, through=None):
                 (run, order["trade_id"], rule, through, through),
             )
         ]
-        rows.append(dict(fills=fills, trade_id=order["trade_id"], rule=rule, entry=entry, exit=exit_order,
+        statuses = {}
+        for leg in (entry, exit_order):
+            if leg is None or not leg.get("order_id"):
+                continue
+            last = db.execute(
+                "SELECT body FROM events WHERE run=? AND json_extract(body,'$.order_id')=? "
+                "AND json_extract(body,'$.kind') IN ('order status','fill') "
+                "AND (? IS NULL OR sequence<=?) ORDER BY sequence DESC LIMIT 1",
+                (run, leg["order_id"], through, through),
+            ).fetchone()
+            if last:
+                statuses[leg["order_id"]] = json.loads(last[0])
+        rows.append(dict(order_states=statuses, fills=fills, trade_id=order["trade_id"], rule=rule, entry=entry, exit=exit_order,
                          observation=json.loads(observation) if observation else None))
     return rows
