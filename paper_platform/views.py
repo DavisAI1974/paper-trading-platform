@@ -8,6 +8,8 @@ from string import Template
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
+from root.calendar import label as calendar_label
+
 from .market import markets
 from .rulebook import catalogue
 
@@ -27,9 +29,17 @@ def prices(row, profile):
 
 def trade_card(trade, profile):
     def time_at(event):
-        seconds, nanos = divmod(int(event.get("fill_received_ns", event["received"])), 1_000_000_000)
+        # Never a bare date: the trade day (6 pm Eastern the evening before to 5 pm Eastern) or the
+        # 5 pm to 6 pm stretch is named first. The label is taken from the tape receive time the row carries.
+        received = int(event.get("fill_received_ns", event["received"]))
+        seconds, nanos = divmod(received, 1_000_000_000)
         moment = datetime.fromtimestamp(seconds, ZoneInfo("America/New_York"))
-        return f"{moment:%Y-%m-%d %H:%M:%S}.{nanos:09d} {moment:%Z}"
+        try:
+            name, named = calendar_label(received)
+            day = f"trade day {named:%Y-%m-%d}" if named else name
+        except ValueError:
+            day = "no trade day"
+        return f"{day} · {moment:%H:%M:%S}.{nanos:09d} {moment:%Z} (Eastern clock date {moment:%Y-%m-%d})"
 
     def leg(label, order):
         at = time_at(order)
@@ -65,14 +75,19 @@ def trade_card(trade, profile):
         if point:
             role = f" · {e(point['rule'])}" if point["rule"] != rule else ""
             admin = " · Administrative close" if point.get("trade_data") is False else ""
+            seen = point.get("quote_received")
+            # A close made by a timer has the timer's instant and the quotes of the last message before it.
+            earlier = (f" · quotes seen {time_at(dict(received=seen))}"
+                       if seen not in (None, point["received"]) else "")
             return (f"<span class='trade-end'><b>{label}{role}{admin}</b> · {time_at(point)}"
-                    f"<small>{prices(point, profile)}</small>"
+                    f"<small>{prices(point, profile)}{earlier}</small>"
                     f"<span>{e(point.get('reason') or 'Reason unavailable')}</span></span>")
         detail = ""
         if instruction:
             reason = instruction.get("decision_reason") or instruction.get("reason")
             if reason:
-                detail = f"<small>Instruction · {e(reason)}</small>"
+                kind = "Administrative instruction" if instruction.get("trade_data") is False else "Instruction"
+                detail = f"<small>{kind} · {e(reason)}</small>"
         return f"<span class='trade-end'><b>{label}</b> · {pending}{detail}</span>"
 
     if timing["basis"] == "fill":
@@ -107,10 +122,16 @@ def trade_card(trade, profile):
         elif order.get("trade_data") is False:
             label = "Administrative close · excluded from trade data"
         else:
-            label = "Manager exit" if order.get("management_only") else "Exit order"
+            if not order.get("management_only"):
+                label = "Exit order"
+            else:
+                label = "Manager exit" if order.get("signal_action") == "exit" else "Manager close after parent close"
         fields.append(leg(label, order))
     for attempt in attempts:
-        label = "Entry instruction" if attempt["action"] == "open" else "Exit instruction"
+        if attempt["action"] == "open":
+            label = "Entry instruction"
+        else:
+            label = "Administrative close instruction" if attempt.get("trade_data") is False else "Exit instruction"
         fields.append(leg(label + " · No order sent", attempt))
     if trade["observation"]:
         fields.append(f"<p>{e(trade['observation']['reason'])}</p>")

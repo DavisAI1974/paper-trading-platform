@@ -32,6 +32,7 @@ def _endpoint(event, reason):
     return dict(received=event.get("fill_received_ns", event["received"]), rule=event["rule"],
                 bid=event.get("bid"), ask=event.get("ask"), reason=reason,
                 order_id=event.get("order_id"), fill_id=event.get("fill_id"),
+                quote_received=event.get("quote_received_ns"),
                 quote_reference=event.get("quote_reference") if event["kind"] == "fill"
                 else event.get("expiry_quote_reference", event.get("reference")),
                 trade_data=event.get("trade_data", True))
