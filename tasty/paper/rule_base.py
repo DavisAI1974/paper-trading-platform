@@ -16,7 +16,13 @@ from tasty.paper.lines import EMPTY, MISSING, LineState
 
 BUY, SELL = 'BUY', 'SELL'
 RIGHT, WRONG, NEITHER = 'right', 'wrong', 'neither'
-UNDECIDED = 'undecided: both happened at one print'
+
+
+def both(*events) -> str:
+    """Two things a rule orders showed at one print (Greg, 2026-11-24: "Can't we make both decisions at the same
+    time? They're different events right?"). Each is written as its own event at that print; no "first" is
+    claimed, so the line carries this in the place of right or wrong."""
+    return 'both at one print: ' + '; '.join(events)
 
 
 @dataclass(frozen=True)

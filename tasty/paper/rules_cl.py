@@ -7,13 +7,13 @@ print known at the next print, and CL13's own stand-in (prints of one side shari
 price). Rule 2: the same run, hump, level or leg never opens a second trade. Rule 5: a print with no side is never
 given to a rule; an EMPTY or MISSING input opens nothing and is counted by name. Rule 6: nothing opens on a moment with
 no print; a hump's end still closes CL07 and CL08 at the next print, known_late. Rules 3 and 4 are not in Part A.
-Where two things that the rule orders happen at one print the verdict is UNDECIDED (the rule does not say).
+Where two things that the rule orders show at one print, both are written, each as its own event (rule_base.both).
 """
 from __future__ import annotations
 
 from root.calcs.quote_runs import FURTHER, STARTED, STEP_BACK
 from tasty.paper.lines import AT_MOMENT, CUT, EMPTY, MISSING, ON_TRADE, sign_of
-from tasty.paper.rule_base import BUY, RIGHT, SELL, UNDECIDED, WRONG, Rule, Snapshot, side_of_run, when
+from tasty.paper.rule_base import BUY, RIGHT, SELL, WRONG, Rule, Snapshot, both, side_of_run, when
 
 BID, ASK = 'best bid', 'best ask'
 CUT_RUN = 'first quote run cut at the start'
@@ -113,7 +113,9 @@ class CL06(Rule):
                     continue
                 same, other = (ups, downs) if t['side'] == BUY else (downs, ups)
                 if other:
-                    v = RIGHT if t['further'] else (UNDECIDED if same else WRONG)
+                    v = RIGHT if t['further'] else (
+                        both('a quote stepped further the same way', 'a quote stepped the other way') if same
+                        else WRONG)
                     out += self.close(tid, 'the first step the other way by either quote', v)
                 elif same:
                     t['further'] = True
@@ -164,7 +166,9 @@ class CL07(_Hump):
             for tid, t in list(self.trades.items()):
                 if t['key'] == ('hump', e['began_read']):
                     a = t['away_at']
-                    v = WRONG if (a is None or a > end) else (UNDECIDED if a == end else RIGHT)
+                    v = WRONG if (a is None or a > end) else (
+                        both('the quote the hump was hitting stepped away', 'the hump ended') if a == end
+                        else RIGHT)
                     out += self.close(tid, 'the hump ended', v, known_late=e['known_late'],
                                       detail=dict(ended_ns=e['ended_ns']))
         h = snap.lines.hump
@@ -213,9 +217,9 @@ class CL08(_Hump):
                 ev.append((t['back'], "the quote's first step back", False, None))
             if ev:
                 at, why, late, detail = min(ev, key=lambda x: x[0])
-                tie = sum(1 for x in ev if x[0] == at) > 1
                 a = t['second_at']
-                v = UNDECIDED if tie or a == at else (RIGHT if a is not None and a < at else WRONG)
+                here = [x[1] for x in ev if x[0] == at] + (["that quote's second step"] if a == at else [])
+                v = both(*here) if len(here) > 1 else (RIGHT if a is not None and a < at else WRONG)
                 out += self.close(tid, why, v, known_late=late, detail=detail)
         for e in snap.lines.hump_ends:
             self.pending.pop(e['began_read'], None)
