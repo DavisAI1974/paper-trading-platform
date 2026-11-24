@@ -203,13 +203,18 @@ def main():
     p.add_argument("--market", default="nymex-ng")
     p.add_argument("--message-budget", type=int, required=True)
     p.add_argument("--event-budget", type=int, required=True)
-    p.add_argument("--capture", type=Path)
+    capture = p.add_mutually_exclusive_group()
+    capture.add_argument("--capture", type=Path)
+    capture.add_argument("--replay-capture", type=Path)
+    p.add_argument("--capture-commit")
     p.add_argument("--capture-connection", type=int)
     plans = p.add_mutually_exclusive_group()
     plans.add_argument("--execution-plan", type=Path)
     plans.add_argument("--agent-plan")
     p.add_argument("--greg-go", action="store_true")
     args = p.parse_args()
+    if args.replay_capture and args.capture_connection is not None:
+        p.error("a stored capture has no active recorder connection")
     if not args.greg_go:
         p.error("Greg must start this run")
     url = os.environ["PAPER_RELAY_URL"].rstrip("/")
@@ -235,7 +240,8 @@ def main():
             message_budget=args.message_budget,
             output_budget=args.event_budget,
             market_key=args.market,
-            started=started, captured=args.capture, capture_connection=args.capture_connection,
+            started=started, captured=args.capture or args.replay_capture, capture_connection=args.capture_connection,
+            replay_capture=args.replay_capture is not None, capture_commit=args.capture_commit,
             execution_plan=execution_plan, plan_source=plan_source,
         )
         pub = Publication(s, url, push_url)

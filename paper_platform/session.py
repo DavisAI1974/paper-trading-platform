@@ -34,6 +34,7 @@ class Session:
     def __init__(
         self, data_root, trade_day, *, message_budget, output_budget, market_key="nymex-ng", on_event=None,
         started=None, execution_plan=None, captured=None, plan_source=None, capture_connection=None,
+        replay_capture=False, capture_commit=None,
     ):
         self.started = time.monotonic() if started is None else started
         self.trade_day = trade_day.isoformat()
@@ -81,13 +82,16 @@ class Session:
             path = Path(captured).resolve()
             relative = path.relative_to(self.data_root / "paper-trading" / "captures")
             self.feed = CapturedFeed(path, trade_day, capture_connection)
-            causal_check = capture_preflight(self.feed, self.rules, self.started + LIMIT_SECONDS)
-            self.stream = self.feed.messages(follow=True, poll=True)
+            causal_check = capture_preflight(self.feed, self.rules, self.started + LIMIT_SECONDS, follow=not replay_capture)
+            self.stream = self.feed.messages(follow=not replay_capture, poll=not replay_capture, through_trade_day=replay_capture)
             import sqlite3
             from contextlib import closing
             with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as db:
                 self.warm_through = db.execute("SELECT COALESCE(MAX(position),-1) FROM frames").fetchone()[0]
-            sources = [dict(capture=relative.as_posix(), connection_id=self.feed.connection_id, reference="frame SHA-256 and tape position")]
+            sources = [dict(capture=relative.as_posix(), connection_id=self.feed.connection_id,
+                            mode="stored replay" if replay_capture else "follow recorder",
+                            checkpoint_commit=capture_commit, warm_through=None if replay_capture else self.warm_through,
+                            reference="frame SHA-256 and tape position")]
         else:
             self.feed = HistoricalFeed(folder, trade_day, market_key)
             causal_check = check_prefix(self.feed, self.rules, self.started + LIMIT_SECONDS)

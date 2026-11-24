@@ -27,25 +27,27 @@ class Checkpoints:
         self.database = database
         self.branch = branch
         self.folder = self.root / "paper-trading" / "capture-backup"
-        remote = git(self.root, "remote", "get-url", "--push", "--all", "origin").lower().removesuffix(".git")
-        if remote != "git@github.com:davisai1974/markets-data":
-            raise ValueError("capture backups require the markets-data deploy key")
         self.cipher = Fernet(os.environ["PAPER_CAPTURE_KEY"].encode())
 
-    def initialize(self):
+    def initialize(self, *, existing=False):
+        origin = git(self.root, "remote", "get-url", "origin").lower().removesuffix(".git")
+        if origin not in ("https://github.com/davisai1974/markets-data", "git@github.com:davisai1974/markets-data"):
+            raise ValueError("restore capture checkpoints from markets-data")
         ref = "refs/heads/" + self.branch
         result = subprocess.run(["git", "-C", self.root, "ls-remote", "--exit-code", "origin", ref],
                                 stdout=subprocess.DEVNULL)
         if result.returncode == 0:
             git(self.root, "fetch", "--depth=1", "origin", ref)
             git(self.root, "switch", "-C", self.branch, "FETCH_HEAD")
-        elif result.returncode == 2:
+        elif result.returncode == 2 and not existing:
             git(self.root, "switch", "-c", self.branch)
         else:
             raise RuntimeError("cannot read the capture branch")
         self.folder.mkdir(parents=True, exist_ok=True)
         manifest = self.folder / "checkpoint.enc"
         if not manifest.exists():
+            if existing:
+                raise ValueError("missing recorded capture checkpoint")
             return
         blocks = json.loads(self.cipher.decrypt(manifest.read_bytes()))
         self.database.parent.mkdir(parents=True, exist_ok=True)
@@ -59,6 +61,9 @@ class Checkpoints:
                 output.write(data)
 
     def publish(self):
+        remote = git(self.root, "remote", "get-url", "--push", "--all", "origin").lower().removesuffix(".git")
+        if remote != "git@github.com:davisai1974/markets-data":
+            raise ValueError("capture backups require the markets-data deploy key")
         if not self.database.is_file():
             return
         with tempfile.TemporaryDirectory() as tmp:
@@ -90,7 +95,7 @@ class Checkpoints:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("operation", choices=["restore", "publish", "follow"])
+    parser.add_argument("operation", choices=["restore", "restore-recording", "publish", "follow"])
     parser.add_argument("--checkout", type=Path, required=True)
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--trade-day", type=date.fromisoformat, required=True)
@@ -99,8 +104,10 @@ def main():
     week = week_sunday(args.trade_day).isoformat()
     db = args.data.resolve() / "paper-trading" / "captures" / "nymex-ng" / week / (args.source + ".sqlite")
     store = Checkpoints(args.checkout, db, f"mbo-captures/nymex-ng/{week}/{args.source}")
-    if args.operation == "restore":
-        store.initialize()
+    if args.operation in ("restore", "restore-recording"):
+        store.initialize(existing=args.operation == "restore-recording")
+        if args.operation == "restore-recording":
+            print(db)
     elif args.operation == "publish":
         store.publish()
     else:

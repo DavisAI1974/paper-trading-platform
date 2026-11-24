@@ -11,7 +11,7 @@ import struct
 import time
 
 from root import tape
-from root.calendar import to_ns, week_sunday
+from root.calendar import clock_days_needed, to_ns, week_sunday
 
 from .feed import MboTape
 
@@ -162,7 +162,7 @@ class CapturedFeed:
             db.execute("BEGIN")
             return self._connection_end(db)
 
-    def messages(self, *, follow=False, poll=False):
+    def messages(self, *, follow=False, poll=False, through_trade_day=False):
         uri = self.path.resolve().as_uri() + "?mode=ro"
         db = sqlite3.connect(uri, uri=True)
         stream = instrument = None
@@ -172,6 +172,11 @@ class CapturedFeed:
             sunday = week_sunday(self.trade_day)
             if identity["sunday"] != sunday.isoformat() or identity["market"] != "nymex-ng":
                 raise ValueError("capture does not cover the requested market week")
+            replay_end = None
+            if through_trade_day:
+                # Match the purchased reader's last UTC file, including the marked break.
+                end_day = clock_days_needed(self.trade_day)[-1] + timedelta(days=1)
+                replay_end = to_ns(datetime.combine(end_day, wall_time(), timezone.utc))
             next_week = to_ns(datetime.combine(sunday + timedelta(days=7), wall_time(), timezone.utc))
             while True:
                 db.execute("BEGIN")
@@ -212,6 +217,8 @@ class CapturedFeed:
                     continue
                 for index, body, received_ns in batch:
                     fields = dict(zip(MBO_FIELDS, MBO.unpack(body), strict=True))
+                    if replay_end is not None and fields["ts_event"] >= replay_end:
+                        return
                     if stream is None:
                         day = datetime.fromtimestamp(fields["ts_event"] // 1_000_000_000, timezone.utc).date()
                         if day != sunday or fields["action"] != tape.CLEAR or fields["flags"] & tape.flag_bits()["F_SNAPSHOT"]:
@@ -233,7 +240,7 @@ class CapturedFeed:
             db.close()
 
 
-def capture_preflight(feed, rules, deadline, *, minimum=4096):
+def capture_preflight(feed, rules, deadline, *, minimum=4096, follow=True):
     """Compare decisions on the collected prefix with a physically shortened copy."""
     from tempfile import TemporaryDirectory
     from .causal_gate import PreflightDeadline
@@ -250,7 +257,7 @@ def capture_preflight(feed, rules, deadline, *, minimum=4096):
                                      separators=(",", ":")).encode() + b"\n")
         return decisions
 
-    for message in feed.messages(follow=True, poll=True):
+    for message in feed.messages(follow=follow, poll=follow, through_trade_day=not follow):
         if time.monotonic() >= deadline:
             raise PreflightDeadline("5.75-hour budget reached during capture preflight")
         if "capture_end" in message:

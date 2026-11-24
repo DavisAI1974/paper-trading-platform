@@ -11,6 +11,11 @@ on:
         description: Named Eastern trade day (YYYY-MM-DD)
         required: true
         type: string
+      tape:
+        description: Stored MBO input from markets-data
+        type: choice
+        options: [purchased-archive, purchased-capture, live-capture]
+        default: purchased-archive
       execution_plan:
         description: Committed agent plan filename or inline execution plan JSON
         type: string
@@ -57,7 +62,22 @@ jobs:
         with:
           python-version: '3.13'
       - run: python -m pip install -r paper_platform/requirements.txt
-      - name: Replay purchased data on the recorded clock
+      - if: inputs.tape == 'purchased-capture' || inputs.tape == 'live-capture'
+        uses: ./.github/actions/markets-data
+        with:
+          path: recorded-checkpoint
+          paths: paper-trading/capture-backup
+      - name: Restore the recorded week
+        if: inputs.tape == 'purchased-capture' || inputs.tape == 'live-capture'
+        env:
+          TRADE_DAY: ${{ inputs.trade_day }}
+          TAPE: ${{ inputs.tape }}
+          PAPER_CAPTURE_KEY: ${{ secrets.PAPER_CAPTURE_KEY }}
+        run: |
+          capture=$(python -m paper_platform.capture_backup restore-recording --data purchased-inputs --checkout recorded-checkpoint --trade-day "$TRADE_DAY" --source "${TAPE%-capture}")
+          echo "RECORDED_CAPTURE=$capture" >> "$GITHUB_ENV"
+          echo "CAPTURE_COMMIT=$(git -C recorded-checkpoint rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Replay the selected stored tape
         env:
           TRADE_DAY: ${{ inputs.trade_day }}
           EXECUTION_PLAN: ${{ inputs.execution_plan }}
@@ -70,4 +90,8 @@ jobs:
           PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
         run: |
-          python -B -m paper_platform.run --agent-plan "$EXECUTION_PLAN" --greg-go --data purchased-inputs --market "$MARKET" --trade-day "$TRADE_DAY" --message-budget "$MESSAGE_BUDGET" --event-budget "$EVENT_BUDGET"
+          capture_args=()
+          if [[ -n "${RECORDED_CAPTURE:-}" ]]; then
+            capture_args=(--replay-capture "$RECORDED_CAPTURE" --capture-commit "$CAPTURE_COMMIT")
+          fi
+          python -B -m paper_platform.run "${capture_args[@]}" --agent-plan "$EXECUTION_PLAN" --greg-go --data purchased-inputs --market "$MARKET" --trade-day "$TRADE_DAY" --message-budget "$MESSAGE_BUDGET" --event-budget "$EVENT_BUDGET"

@@ -56,7 +56,7 @@
 
 - [ ] **12.** Replay mode: the same platform runs a stored trade day's tape, tick by tick, with the same code as live. SUGGESTED
 
-  **In progress.** Purchased replay is implemented. PR 5 shares the book projection with capture. Live/replay decision parity remains open.
+  **In progress.** The manual replay workflow defaults to the purchased DBN archive. PR 5 can also restore a purchased or live capture checkpoint from markets-data and replay the committed tape through the named trade day’s final UTC file using the same book, calculations and native venues. The receipt names the checkpoint commit. Live runs also record their historical warm-up boundary. Live/replay decision parity remains open.
 
 ## THE RULES OF THE HOUSE
 
