@@ -14,10 +14,11 @@ def read_receipt(folder):
     return receipt
 
 
-def decisions(folder, receipt):
+def decisions(folder, receipt, *, execution=False):
     # An opening signal defines the identity used by later closes, observations
     # and managers. Its ordinal is stable across independently named sessions.
     openings = {}
+    orders = {}
     journal_hash = hashlib.sha256()
     count = 0
     last = None
@@ -30,16 +31,28 @@ def decisions(folder, receipt):
                 raise ValueError(f"{folder.name}: journal discontinuity at {count}")
             count += 1
             last = event
-            if event["kind"] != "signal":
-                continue
-            if event["action"] == "open":
+            if event["kind"] == "signal" and event["action"] == "open":
                 key = event["trade_id"]
                 if key in openings:
                     raise ValueError(f"{folder.name}: repeated trade opening at sequence {seq}")
                 openings[key] = len(openings)
-            signal = dict(event)
-            for field in ("run", "recorded_ns", "sequence"):
-                del signal[field]
+            if execution:
+                if event["kind"] not in ("paper order", "fill", "order status"):
+                    continue
+                fields = ("kind", "rule", "action", "trade_id", "source_trade_id", "entry_rule", "reason",
+                          "trade_data", "received", "reference", "order_side", "side", "quantity",
+                          "placement", "limit_price", "fill_price", "bid", "ask", "fill_received_ns",
+                          "quote_reference", "liquidity", "order_status", "execution_event", "submitted",
+                          "remaining_quantity", "remaining_contracts", "administrative_reason")
+                signal = {field: event[field] for field in fields if field in event}
+                if event.get("order_id") is not None:
+                    signal["order"] = orders.setdefault(event["order_id"], len(orders))
+                if "working_order_ids" in event:
+                    signal["working_orders"] = sorted(orders[tag] for tag in event["working_order_ids"])
+            else:
+                if event["kind"] != "signal":
+                    continue
+                signal = {k: v for k, v in event.items() if k not in ("run", "recorded_ns", "sequence")}
             for field in ("trade_id", "source_trade_id"):
                 if signal.get(field) is not None:
                     parent, _, manager = signal[field].partition("/")
@@ -101,7 +114,23 @@ def compare(live_folder, replay_folder):
     replay_frames = replay.get("capture_frame_hashes_sha256")
     if live_frames != replay_frames:
         window_differences.append("ordered capture frames")
+    for field in ("weekly_book_boundaries", "calculation_files"):
+        if live.get(field) != replay.get(field):
+            window_differences.append(field)
+    first_execution_difference = None
+    execution_counts = [0, 0]
+    if live.get("execution_plan") is not None:
+        pairs = zip_longest(decisions(live_folder, live, execution=True),
+                            decisions(replay_folder, replay, execution=True))
+        for ordinal, (original, reproduced) in enumerate(pairs, start=1):
+            execution_counts[0] += original is not None
+            execution_counts[1] += reproduced is not None
+            if first_execution_difference is None and (original is None or reproduced is None
+                                                      or original[1] != reproduced[1]):
+                first_execution_difference = dict(event=ordinal, live=original, replay=reproduced)
     return dict(live=live["run"], replay=replay["run"], window_differences=window_differences,
+                live_execution_events=execution_counts[0], replay_execution_events=execution_counts[1],
+                first_execution_difference=first_execution_difference,
                 frame_fingerprints_available=live_frames is not None and replay_frames is not None,
                 eligible_live_input=live["first_live_decision_cursor"] is not None,
                 live_decisions=live_count, replay_decisions=replay_count, first_difference=first_difference)
@@ -114,8 +143,9 @@ def main():
     args = parser.parse_args()
     report = compare(args.live, args.replay)
     print(json.dumps(report, indent=2))
-    if report["window_differences"] or report["first_difference"] is not None:
-        raise SystemExit("The run windows or strategy decisions differ.")
+    if (report["window_differences"] or report["first_difference"] is not None
+            or report["first_execution_difference"] is not None):
+        raise SystemExit("The run windows, strategy decisions or paper execution events differ.")
     if not report["eligible_live_input"] or not report["live_decisions"]:
         raise SystemExit("The journals contain no eligible strategy decision to establish parity.")
 
