@@ -23,6 +23,12 @@ from .run import notify
 from .session import LIMIT_SECONDS, git
 
 
+# The gateway sends a heartbeat while market data is quiet. Databento allows
+# ten seconds beyond the negotiated interval before treating a connection as hung.
+HEARTBEAT_SECONDS = 30
+HEARTBEAT_GRACE_SECONDS = 10
+
+
 class Sink:
     """Databento writes the DBN metadata followed by one encoded record per call."""
 
@@ -33,6 +39,7 @@ class Sink:
         self.message_budget = message_budget
         self.deadline = started + LIMIT_SECONDS
         self.records = 0
+        self.last_delivery_at = started
         self.done = threading.Event()
         self.reason = None
         self.error = None
@@ -54,7 +61,8 @@ class Sink:
 
     def write(self, data, *, snapshot=False):
         received_ns = time.time_ns()
-        if time.monotonic() >= self.deadline:
+        self.last_delivery_at = time.monotonic()
+        if self.last_delivery_at >= self.deadline:
             self.stop("clock limit")
         if self.done.is_set():
             return len(data)
@@ -121,7 +129,7 @@ def live(trade_day, profile, sink):
     if not os.environ.get("DATABENTO_API_KEY", "").strip():
         raise ValueError("the live data entitlement requires DATABENTO_API_KEY")
     sunday = week_sunday(trade_day)
-    client = db.Live(ts_out=False, reconnect_policy="none")
+    client = db.Live(ts_out=False, reconnect_policy="none", heartbeat_interval_s=HEARTBEAT_SECONDS)
     client.add_stream(sink, exception_callback=sink.failed)
     def control(record):
         if isinstance(record, ErrorMsg):
@@ -137,11 +145,15 @@ def live(trade_day, profile, sink):
         client.subscribe(dataset=profile["source"], schema=profile["schema"], symbols=profile["symbol"],
                          stype_in="continuous", start=datetime.combine(sunday, wall_time(), timezone.utc))
         connected = True
+        subscribed_at = time.monotonic()
         client.start()
         while not sink.done.wait(0.1):
             if not client.is_connected():
                 raise CaptureFailure("live feed disconnected")
-            if time.monotonic() >= sink.deadline:
+            now = time.monotonic()
+            if now - max(subscribed_at, sink.last_delivery_at) > HEARTBEAT_SECONDS + HEARTBEAT_GRACE_SECONDS:
+                raise CaptureFailure("live feed heartbeat timed out")
+            if now >= sink.deadline:
                 sink.stop("clock limit")
         if sink.error is not None:
             if isinstance(sink.error, CaptureFailure):
