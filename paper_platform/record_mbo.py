@@ -11,7 +11,7 @@ import threading
 import time
 
 import databento as db
-from databento_dbn import F_SNAPSHOT, RType
+from databento_dbn import ErrorMsg, F_SNAPSHOT, RType, SystemCode, SystemMsg
 import zstandard
 
 from root.calendar import clock_days_needed, week_sunday
@@ -123,6 +123,15 @@ def live(trade_day, profile, sink):
     sunday = week_sunday(trade_day)
     client = db.Live(ts_out=False, reconnect_policy="none")
     client.add_stream(sink, exception_callback=sink.failed)
+    def control(record):
+        if isinstance(record, ErrorMsg):
+            sink.failed(RuntimeError("Databento reported a feed error"))
+        elif isinstance(record, SystemMsg) and record.code == SystemCode.REPLAY_COMPLETED:
+            with sink.writer.db:
+                sink.writer.db.execute("INSERT OR IGNORE INTO live_starts VALUES(?,?)",
+                                       (sink.writer.connection_id, sink.writer.position))
+
+    client.add_callback(control, exception_callback=sink.failed)
     connected = False
     try:
         client.subscribe(dataset=profile["source"], schema=profile["schema"], symbols=profile["symbol"],

@@ -76,6 +76,7 @@ def capture_writer(path, identity):
                 CREATE TABLE IF NOT EXISTS connections(
                     id INTEGER PRIMARY KEY, opened_ns INTEGER NOT NULL, ended_ns INTEGER, status TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS live_starts(connection_id INTEGER PRIMARY KEY, position INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS frames(
                     id INTEGER PRIMARY KEY, connection_id INTEGER NOT NULL, received_ns INTEGER NOT NULL,
                     kind TEXT NOT NULL, body BLOB NOT NULL, position INTEGER UNIQUE, replay_of INTEGER
@@ -128,6 +129,10 @@ class CapturedFeed:
                     "SELECT position,body,received_ns FROM frames WHERE position>=? ORDER BY position LIMIT 512",
                     (position,),
                 ).fetchall()
+                live_start = None
+                if follow and identity["source"] == "live":
+                    live_start = db.execute("SELECT position FROM live_starts WHERE connection_id="
+                                            "(SELECT MAX(id) FROM connections)").fetchone()
                 state = db.execute("SELECT status FROM connections ORDER BY id DESC LIMIT 1").fetchone()
                 db.commit()
                 if not batch:
@@ -165,6 +170,8 @@ class CapturedFeed:
                     message = stream.apply(fields, source_sha256=hashlib.sha256(body).hexdigest(),
                                            index=index, local_ns=received_ns)
                     message["received_by_capture_ns"] = message.pop("received_by_replay_ns")
+                    if follow and identity["source"] == "live":
+                        message["live_eligible"] = live_start is not None and index >= live_start[0]
                     yield message
                     position += 1
         finally:
