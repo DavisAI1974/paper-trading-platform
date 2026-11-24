@@ -148,3 +148,61 @@ def test_filtered_stream_reports_closure_after_the_last_matching_event(viewer, o
 
     resumed = client.get("/stream", params=params, headers={"Last-Event-ID": f"{run}/0"}, auth=auth)
     assert resumed.text.strip() == finished
+
+
+def test_strategy_trade_list_pairs_only_its_own_orders(viewer):
+    from itertools import islice
+
+    client, auth, headers = viewer
+    source = HistoricalFeed(
+        Path(os.environ["MARKETS_DATA"]) / "data/nymex_mbo/ng_v0_oct2023", date(2023, 10, 2)
+    )
+    run = uuid.uuid4().hex
+    engine = Engine(source.trade_day, run)
+    decisions = [d for message in islice(source.messages(), len(source.week[0].records))
+                 for d in engine.tick(message)]
+    decisions.extend(engine.stop("end of offline verification"))
+    closed = next(d for d in decisions if d["action"] == "close" and d["trade_data"])
+    forced = next(d for d in decisions if d["action"] == "close" and not d["trade_data"])
+    manager = next(d for d in decisions if d["action"] == "exit" and d.get("management_only"))
+    openings = {d["trade_id"]: d for d in decisions if d["action"] == "open"}
+    keys = {closed["trade_id"], forced["trade_id"], manager["trade_id"], manager["source_trade_id"]}
+    sequence = 0
+    expected = {}
+    params = dict(rule=closed["rule"], run=run)
+    assert client.get("/api/trades", params=params).status_code == 401
+    for decision in decisions:
+        if decision["trade_id"] not in keys:
+            continue
+        for kind in ("signal", "paper order") if decision["action"] in ("open", "exit", "close") else ("signal",):
+            event = wire(dict(run=run, market="nymex-ng", sequence=sequence, recorded_ns=time.time_ns(),
+                              kind=kind, **decision))
+            packet = dict(event=event, status=dict(run=run, market="nymex-ng", status="active"))
+            assert client.post("/ingest", json=packet, headers=headers).json() == {"next": sequence + 1}
+            sequence += 1
+            if kind == "paper order" and decision["action"] == "open":
+                expected[decision["trade_id"]] = event
+                rows = client.get("/api/trades", params=dict(params, rule=decision["rule"]), auth=auth).json()
+                row = next(r for r in rows if r["trade_id"] == decision["trade_id"])
+                assert row["entry"] == event and row["exit"] is None
+    finish(client, headers, run, sequence)
+    for exit_order in (closed, forced, manager):
+        params["rule"] = exit_order["rule"]
+        rows = client.get("/api/trades", params=params, auth=auth).json()
+        row, = [r for r in rows if r["trade_id"] == exit_order["trade_id"]]
+        source_id = exit_order.get("source_trade_id", exit_order["trade_id"])
+        assert row["entry"] == expected[source_id]
+        for field in ("rule", "received", "reason", "bid", "ask", "reference"):
+            assert row["exit"][field] == wire(exit_order[field])
+        html = client.get("/", params=params, auth=auth).text
+        assert f'id="trade-{exit_order["trade_id"]}"' in html
+        assert str(openings[source_id]["received"]) in html and str(exit_order["received"]) in html
+        stream = client.get("/stream", params=params, auth=auth).text
+        frames = [json.loads(line[6:]) for line in stream.splitlines() if line.startswith("data: ")]
+        matching = [f["trade_html"] for f in frames if f.get("trade_id") == exit_order["trade_id"]]
+        assert matching and exit_order["reason"] in matching[-1]
+        if exit_order is forced:
+            assert "Administrative close" in matching[-1]
+        if exit_order is manager:
+            assert "Manager exit" in matching[-1]
+    assert client.get("/api/trades", params=dict(params, run=uuid.uuid4().hex), auth=auth).json() == []
