@@ -60,7 +60,10 @@ class Session:
         if execution_plan is not None:
             from .paper_execution import PaperExecution
             self.execution = PaperExecution(execution_plan, self.rules, self.write)
-        self.rule_commits = {key: self.revision for key in self.rules}
+        self.rule_commits = {
+            key: git(code, "log", "-1", "--format=%H", self.revision, "--", f"paper_platform/rules/{key}.json")
+            for key in self.rules
+        }
         self.state = "active"
         self.cursor = -1
         self.events = 0
@@ -281,10 +284,18 @@ class Session:
                 return
             self.state = reason
             try:
-                for e in self.engine.stop(reason):
-                    self.record(e)
+                close_signals = {}
+                for decision in self.engine.stop(reason):
+                    if self.execution is None:
+                        self.record(decision)
+                        continue
+                    signal = self.write("signal", **decision)
+                    if decision["action"] == "close":
+                        for instruction in self.execution.instructions(dict(decision, signal_sequence=signal["sequence"])):
+                            close_signals[instruction["rule"], instruction["trade_id"]] = instruction
                 if self.execution and self.last:
-                    self.execution.flatten(self.last, reason, self.run, executable=self.liquidation_available)
+                    self.execution.flatten(self.last, reason, self.run, executable=self.liquidation_available,
+                                           close_signals=close_signals)
                 self.write("status", reason=reason, trade_data=False, last_source=self.last_source(),
                            capture_end=self.capture_end, remaining_paper_inventory=self._paper_inventory())
             finally:

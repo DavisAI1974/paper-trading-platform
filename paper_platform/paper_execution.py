@@ -257,13 +257,14 @@ class PaperExecution:
             style = {"style": "cross", "offset_ticks": 0}
         self.venues[rule].submit(event, style, policy["contracts"], order_id)
 
-    def flatten(self, last, reason, run, *, executable=True):
+    def flatten(self, last, reason, run, *, executable=True, close_signals=None):
         for rule, venue in self.venues.items():
             keys = dict.fromkeys(venue.active_orders)
             keys.update((key, None) for key, held in venue.inventory.items() if held)
             for key in keys:
                 identifier = f"{run}-flatten-{rule}-{key}"
-                event = dict(rule=rule, trade_id=key, action="close", trade_data=False,
+                event = dict((close_signals or {}).get((rule, key), {}),
+                             rule=rule, trade_id=key, action="close", trade_data=False,
                              administrative_flatten=True, reason=reason, received=last["raw"]["ts_recv"],
                              reference=(last["source_sha256"], last["record_index"]),
                              bid=last["best_bid"], ask=last["best_ask"])

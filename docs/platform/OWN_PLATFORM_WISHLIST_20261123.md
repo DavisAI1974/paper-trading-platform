@@ -92,7 +92,7 @@
 
 - [ ] **20.** A run STOPS ITSELF AT 5.75 HOURS, flattens every position, and marks each closing order "flattened at the 5.75-hour stop": not trade data. DECIDED
 
-  **In progress.** Main stops and records administrative closes for quote-only positions. PR 5 adds cancellation and liquidation of filled inventory and records any unfilled remainder. On feed loss, the draft cancels resting orders and records the actual contracts still held for each trade. Operational evidence is pending.
+  **In progress.** Main stops and records administrative closes for quote-only positions. PR 5 adds cancellation and liquidation of filled inventory and records any unfilled remainder. On feed loss, the draft cancels resting orders and records the actual contracts still held for each trade. A stop now records the strategy close signals, then cancels and liquidates once per venue and trade. Any partial liquidation carries the remaining inventory. Operational evidence is pending.
 
 - [x] **21.** Each run starts over new. Nothing carries over. DECIDED
 
@@ -128,7 +128,7 @@
 
 - [ ] **28.** Append-only: every signal, order, fill and status change, each with its time in nanoseconds, the rule version (git commit) that made it, and the feed messages it was made from. DECIDED
 
-  **In progress.** Signals and orders have source references and rule revisions. PR 5 adds native fill events with source, order, rule revision and finding. Review is pending.
+  **In progress.** Signals and orders have source references and rule revisions. PR 5 adds native fill events with source, order, rule revision and finding. The session resolves the last Git commit that changed each rule file separately from the platform commit. Review is pending.
 
 - [x] **29.** A receipt for every run: code commit, inputs, constants used, files written with their fingerprints. DECIDED
 
@@ -136,7 +136,7 @@
 
 - [ ] **30.** Every order is traceable back: fill to order to rule version to the finding the rule rests on. DECIDED (plan 7d)
 
-  **In progress.** An order links to its signal, rule commit and research finding. PR 5 adds fill-to-order linkage. Review is pending.
+  **In progress.** An order links to its signal, rule commit and research finding. PR 5 links each fill to the original order tag and records the commit that changed its rule file. Administrative liquidation links to the closing signal when one exists. Review is pending.
 
 - [ ] **31.** An order is never sent twice. Each carries its own unique tag. DECIDED
 
