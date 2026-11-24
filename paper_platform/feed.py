@@ -143,6 +143,7 @@ class HistoricalFeed:
     def messages(self, *, paced=False):
         """Fresh independent iterator. Wall time affects delivery pace only, never signal eligibility."""
         stream = MboTape(self.trade_day, self.week[0].instrument_ids[0])
+        self.book = stream.book  # the newest reader's book, for a decider's question; nothing reads it otherwise
         opens, halts = stream.opens, stream.halts
         clock_origin = tape_origin = None
         for file in self.week:

@@ -591,11 +591,21 @@ class Session:
             book = None
             source = getattr(getattr(self, "feed", None), "book", None)
             if source is None:
-                left_out.append(dict(name="book", reason="the weekly book is local to the feed's generator "
-                                     "(feed.py MboTape.book); the session holds no reference to it"))
+                left_out.append(dict(name="book", reason="the feed exposes no book (feed.book): a captured or live "
+                                     "feed keeps it out"))
             else:
                 try:
-                    book = _book_depth(source, left_out)
+                    # messages() is a fresh reader each call, so feed.book may be another reader's book (the causal
+                    # check opens its own). Each side's best price must equal the engine's for this tick, in the
+                    # tape's integer price units; the engine's tick holds prices only, so no size is compared.
+                    theirs = dict(bid=(source.sides[b"B"].prices or [None])[-1],
+                                  ask=(source.sides[b"A"].prices or [None])[0])
+                    ours = dict(bid=t.get("bid"), ask=t.get("ask"))
+                    if all(theirs[k] is not None and theirs[k] == ours[k] for k in ("bid", "ask")):
+                        book = _book_depth(source, left_out)
+                    else:
+                        left_out.append(dict(name="book", reason="the feed's book is not at the signal's tick",
+                                             feed_book_best=theirs, engine_tick_best=ours))
                 except Exception as error:
                     left_out.append(dict(name="book", reason=f"reading it raised {type(error).__name__}"))
             state = dict(inputs=inputs, book=book, known_at_tape_ns=t["received"], left_out=left_out)

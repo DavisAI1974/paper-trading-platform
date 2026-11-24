@@ -467,7 +467,7 @@ def test_state_book_reads_both_sides_best_outward_with_queues_from_a_stand_in_bo
     book = SimpleNamespace(sides={
         b"B": SimpleNamespace(prices=[10, 20, 30], lines={10: line((1, 1)), 20: line((2, 2), (3, 5)), 30: line((4, 4))}),
         b"A": SimpleNamespace(prices=[40, 50], lines={40: line((5, 1)), 50: line((6, 2))})})
-    tick = dict(position=11, received=5)
+    tick = dict(position=11, received=5, bid=30, ask=40)
     s = _state_session(tick, _Stand(a=1), feed=SimpleNamespace(book=book))
     state, _ = s._state_at(dict(position=11, received=5))
     assert [x["price"] for x in state["book"]["bid"]] == [30, 20, 10]
@@ -476,6 +476,30 @@ def test_state_book_reads_both_sides_best_outward_with_queues_from_a_stand_in_bo
     assert "book" not in {x["name"] for x in state["left_out"]}
     broken = SimpleNamespace(sides={})
     state, _ = _state_session(tick, _Stand(a=1), feed=SimpleNamespace(book=broken))._state_at(dict(position=11, received=5))
+    assert state["book"] is None and any(x["name"] == "book" for x in state["left_out"])
+
+
+def test_state_book_is_left_out_with_both_pairs_when_its_best_levels_are_not_the_ticks_stand_ins():
+    from types import SimpleNamespace
+    line = lambda: SimpleNamespace(size=1, orders={1: SimpleNamespace(id=1, size=1)})
+    book = SimpleNamespace(sides={b"B": SimpleNamespace(prices=[30], lines={30: line()}),
+                                  b"A": SimpleNamespace(prices=[40], lines={40: line()})})
+    here = dict(position=11, received=5)
+    for bid, ask in ((30, 41), (29, 40), (None, 40), (30, None)):  # one side differs or is unreadable
+        s = _state_session(dict(here, bid=bid, ask=ask), _Stand(a=1), feed=SimpleNamespace(book=book))
+        state, _ = s._state_at(dict(here))
+        left = [x for x in state["left_out"] if x["name"] == "book"]
+        assert state["book"] is None and left[0]["reason"] == "the feed's book is not at the signal's tick"
+        assert left[0]["feed_book_best"] == dict(bid=30, ask=40) and left[0]["engine_tick_best"] == dict(bid=bid, ask=ask)
+    empty = SimpleNamespace(sides={b"B": SimpleNamespace(prices=[], lines={}), b"A": SimpleNamespace(prices=[], lines={})})
+    s = _state_session(dict(here, bid=None, ask=None), _Stand(a=1), feed=SimpleNamespace(book=empty))
+    assert s._state_at(dict(here))[0]["book"] is None  # an unreadable side is never a match
+
+
+def test_state_book_is_left_out_when_the_feed_has_no_handle_stand_in():
+    from types import SimpleNamespace
+    s = _state_session(dict(position=11, received=5, bid=30, ask=40), _Stand(a=1), feed=SimpleNamespace())
+    state, _ = s._state_at(dict(position=11, received=5))
     assert state["book"] is None and any(x["name"] == "book" for x in state["left_out"])
 
 

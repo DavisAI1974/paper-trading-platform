@@ -7,3 +7,4 @@
 2026-11-24 second review fixes 1 to 8: _malformed key always malformed, by required, gate check inside the try, per-line parse catch, manager rows follow their parent, closing by answer not built (no --answer-close), budget words, checks. Not run on tape.
 2026-11-24 piece 9: the decider's question and its journal row carry exchange_ns and lines (dipole and exhaustion value and width, read from engine.last). Not run on tape.
 2026-11-24 piece 10: the decider's question carries state (every inputs attribute, engine.last, engine.p, book depth when feed.book exists; the book is not yet reachable, named in left_out). Not run on tape.
+2026-11-24 piece 11: HistoricalFeed.messages stores self.book = stream.book (a reference; MboTape never replaces its book); the decider's state.book goes in only when the book's best bid and best ask each equal engine.last's bid and ask, else left out with both pairs. capture.py untouched. Not run on tape.
