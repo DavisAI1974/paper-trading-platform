@@ -12,6 +12,15 @@ stay as written).
   this one has a side. Every fact it is given was made at this print (here=True).
 S5 moments come in `lines.late` and hump ends known late in `lines.hump_ends` (known_late=True); a rule opens
 nothing on them (rule 6). Rule 3: nothing opens on a print inside the settlement window (`snap.in_settlement`).
+`snap.gap` is True at the first print a rule is given after a gap in the feed (a real break only).
+
+A MANAGEMENT RULE (Codex's CX05, CX06, CX11 to CX14) acts on a position another rule opened. It sets
+`manages = 'CX'` and is then given, in `snap.positions`, the open trades of the ENTRY rules whose code starts with
+that prefix (never Claude's). It answers with INDICATION signals, each naming the position's trade id and a kind
+(EXIT, or any other word of the rule's own text such as 'hold' or 'suspend additions'). An indication is written on
+the ledger as its own event under the management rule's code and beside the position it names. Whether an EXIT
+indication also closes that position is decided in ONE place, the engine (`replay.EXIT_INDICATION_CLOSES`), not in
+a rule; when it does, the rule that opened the position is told through `Rule.closed_by_another`.
 """
 from __future__ import annotations
 
@@ -48,6 +57,8 @@ class Snapshot:
     quote_missing: bool            # this print had no bid or no offer
     quote_at_print: Callable       # idx -> (bid, offer) of an earlier print
     in_settlement: bool = False    # this print's feed time is inside the settlement window (rule 3)
+    gap: bool = False              # a gap in the feed since the print this rule was given before
+    positions: tuple = ()          # for a management rule: the open positions it may act on (dicts)
     own_open: MappingProxyType = MappingProxyType({})
 
 
@@ -71,10 +82,23 @@ class CLOSE:
     late_because: Optional[str] = None
 
 
+EXIT = 'exit'
+
+
+@dataclass(frozen=True)
+class INDICATION:
+    rule: str                      # the management rule
+    trade_id: str                  # the position it names (a trade another rule opened)
+    kind: str                      # EXIT, or the rule's own word: 'hold', 'suspend additions', 'release', ...
+    trigger: dict
+    known_late: bool = False
+
+
 class Rule:
     code = '??'
     title = ''
     runs = True
+    manages = None                 # a code prefix ('CX'): this is a management rule of those entries' positions
     reads_no_side = False          # True: the rule is given every print (see the module text)
 
     def __init__(self):
@@ -125,6 +149,11 @@ class Rule:
         else:
             shown_idx = None
         return [CLOSE(self.code, tid, reason, verdict, known_late, detail, shown_idx, why)]
+
+    def closed_by_another(self, tid):
+        """A management rule's exit indication closed this rule's trade: it is no longer open here."""
+        if self.trades.pop(tid, None) is not None:
+            self.counts['closed by an exit indication'] = self.counts.get('closed by an exit indication', 0) + 1
 
     def step(self, snap: Snapshot) -> list:
         self._idx, self._in_settlement = snap.idx, snap.in_settlement

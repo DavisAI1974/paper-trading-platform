@@ -62,6 +62,14 @@ class Ledger:
                                 shown_at=None if shown is None else _end(shown), late_because=sig.late_because,
                                 reason=sig.reason, verdict=sig.verdict, known_late=sig.known_late, detail=sig.detail))
 
+    def indicate(self, sig, p: PRINT):
+        """A management rule's indication about a position another rule opened: its own event, and a note beside
+        the position. It closes nothing here."""
+        note = dict(by=sig.rule, kind=sig.kind, at=_end(p), trigger=sig.trigger, known_late=sig.known_late)
+        self.trades[sig.trade_id].setdefault('indications', []).append(note)
+        self.events.append(dict(event='indication', strategy=sig.rule, trade_id=sig.trade_id, kind=sig.kind,
+                                at=_end(p), trigger=sig.trigger, known_late=sig.known_late))
+
     def settlement_window_began(self):
         for rec in self.trades.values():
             if rec['closed'] is None:

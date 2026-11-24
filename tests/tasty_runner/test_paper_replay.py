@@ -283,3 +283,19 @@ def test_cl17_opens_on_a_print_with_no_side_at_its_own_quote(recording):
             assert e['price'] == e[f]
             assert (place in opened_at) == first_there[f], f'print {place}: opened {place in opened_at}, first there {first_there[f]}'
             first_there[f] = False
+
+
+def test_the_clock_reads_the_open_of_the_trade_day(recording):
+    """The first print of the 10-minute recording is the feed's 6:00:00.000 pm Eastern open (the tape itself says
+    so: it is the first trade after the halt hour). The settlement window holds none of the recording's prints."""
+    import datetime as dt
+    from tasty.paper import clock
+    prints = [e for e in feed_tasty.events_from_recording(recording) if isinstance(e, PRINT)]
+    assert clock.eastern_time(prints[0].time_ns) == dt.time(18, 0)
+    assert not any(clock.in_settlement_window(p.time_ns) for p in prints)
+
+
+def test_the_two_ways_of_following_the_lines_agree_at_sided_prints(recording):
+    eng = run(recording)
+    sided = [(exh, dip) for _, is_sided, exh, dip in eng.lines_every_print.at_every_print if is_sided]
+    assert sided and sided == [(row[1], row[2]) for row in eng.lines.log]

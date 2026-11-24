@@ -24,10 +24,15 @@ from tasty.paper.events import DAYVOLUME, PRINT, QUOTE
 from tasty.paper.ledger import NOT_SCORED, STAND_INS, Ledger
 from tasty.paper.lines import LiveLines
 from tasty.paper.quotes_live import LiveLegs, LiveQuotes
-from tasty.paper.rule_base import CLOSE, OPEN, Snapshot
+from tasty.paper.rule_base import CLOSE, EXIT, INDICATION, OPEN, Snapshot
 from tasty.paper.rules_cl import all_rules
 
 CODE_REPO = Path(__file__).resolve().parents[2]
+
+# Whether a management rule's EXIT indication also closes the position it names. The plan of 2026-11-23 says it
+# does ("an exit indication closes that position of Codex's"); Codex's text also says an exit in one strategy's
+# record "never erases another strategy's entry". Put to Greg 2026-11-24; this is the one place it is set.
+EXIT_INDICATION_CLOSES = True
 
 
 class Engine:
@@ -42,6 +47,7 @@ class Engine:
         self.dv0 = None                 # (day volume, printed size) at the first Trade message with a day volume
         self.unexplained_last, self.gaps, self.day_volume_messages = 0.0, 0, 0
         self.gap_places = []
+        self.gap_since = {}             # rule code -> a gap since the print that rule was given before
         self.in_settlement = False
         self.prints_in_settlement = 0
         self.snapshots_seen = 0
@@ -69,6 +75,7 @@ class Engine:
         if self.prints and p.sequence - self.prints[-1].sequence not in (1, 2):
             self.gaps += 1                              # a real break: the sequence did not step by 1 or 2
             self.gap_places.append(list(p.place))
+            self.gap_since = {rule.code: True for rule in self.rules}
         self.prints.append(p)
         if p.size is not None:
             self.printed_size += p.size
@@ -101,14 +108,38 @@ class Engine:
             snap = snap_every if rule.reads_no_side else snap_sided
             if snap is None:
                 continue
-            own = dataclasses.replace(snap, own_open=MappingProxyType({k: dict(v) for k, v in rule.trades.items()}))
+            own = dataclasses.replace(snap, own_open=MappingProxyType({k: dict(v) for k, v in rule.trades.items()}),
+                                      gap=self.gap_since.pop(rule.code, False), positions=self._positions(rule))
             for sig in rule.step(own):
                 if isinstance(sig, OPEN):
                     self.ledger.open(sig, p, self.gaps)
                 elif isinstance(sig, CLOSE):
                     shown = None if sig.shown_idx is None else self.prints[sig.shown_idx]
                     self.ledger.close(sig, p, shown, self.gaps)
+                elif isinstance(sig, INDICATION):
+                    self._indication(sig, p)
         self.snapshots_seen += 1
+
+    def _positions(self, rule) -> tuple:
+        """For a management rule: the open trades of the entry rules of its family, as plain copies."""
+        if rule.manages is None:
+            return ()
+        entries = {r.code for r in self.rules if r.code.startswith(rule.manages) and r.manages is None}
+        return tuple(dict(trade_id=t['trade_id'], strategy=t['strategy'], side=t['side'], opened=dict(t['opened']),
+                          indications=tuple(dict(i) for i in t.get('indications', ())))
+                     for t in self.ledger.trades.values() if t['closed'] is None and t['strategy'] in entries)
+
+    def _indication(self, sig: INDICATION, p: PRINT):
+        rec = self.ledger.trades.get(sig.trade_id)
+        if rec is None or rec['closed'] is not None:
+            raise ValueError(f'{sig.rule} named {sig.trade_id}, which is not an open position (STOP)')
+        self.ledger.indicate(sig, p)
+        if sig.kind == EXIT and EXIT_INDICATION_CLOSES:
+            self.ledger.close(CLOSE(rec['strategy'], sig.trade_id, f'the exit indication of {sig.rule}', None,
+                                    sig.known_late, dict(indication=sig.trigger)), p, None, self.gaps)
+            for rule in self.rules:
+                if rule.code == rec['strategy']:
+                    rule.closed_by_another(sig.trade_id)
 
     def counts(self) -> dict:
         return dict(prints=self.n_prints, prints_with_no_side=self.n_unsided, quote_messages=self.n_quote_messages,
