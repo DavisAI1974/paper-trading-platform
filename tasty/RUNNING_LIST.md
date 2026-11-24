@@ -163,6 +163,10 @@ line here is a result.
     (orders one at a time behind a queue), C17 (the order budget ends the whole run), C21 (the receipt does not
     show what was left in the account), and everything in section A.
 
+23. 2026-11-24, Greg. FROM NOW, RUNS ARE LEDGER-ONLY: "We can just observe on ledger". The runner is started
+    without `--orders`: it reads the live feed, runs all 32 strategies and writes each paper trade with both quotes
+    at each end; nothing is sent to the sandbox. Each run still needs his go.
+
 ## D. Runs
 
 1. 2026-11-23 evening (trade day Tue Nov 24, 2026), 8:05 pm to 8:12 pm Eastern. THE FIRST RUN WITH ORDERS, on Greg's
