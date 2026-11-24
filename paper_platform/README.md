@@ -64,3 +64,20 @@ The [dashboard restore workflow](../.github/workflows/restore_phone_dashboard.ym
 The live workflow binds the paper runner to the connection opened by its own recorder. A Databento error, disconnect, heartbeat timeout or checkpoint publisher failure stops that session. A writer that exits abruptly can leave its end time unknown. The reader detects the released writer lock and reports the abrupt exit.
 
 For a feed failure the runner cancels resting paper orders, retains any filled contracts still held, and records that liquidation was unavailable. Normal budget and clock stops retain their administrative liquidation path. The terminal journal event and receipt distinguish the recorder’s last durable MBO position from the runner’s last processed input. The Render dashboard shows both when available, including when viewing a single strategy or restoring a completed journal. Pushover stop notices carry the two positions when the runner receives the recorder’s terminal record.
+
+## Answers taken during a run
+
+An answer is one JSON object on one line of a file: `id` (unique), `action` (`rule_off`, `rule_on` or `close`), `rule` (for the first two), `trade_id` (for `close`), `by` (who answered, for example `run:0081`), `packet` (`{"sha256", "tokens"}` or null) and `asked_at_sequence` (the journal sequence of the signal it answers, or null). Who answers is not decided. [`answers.py`](answers.py) holds the sources a session takes answers from and the check of one answer.
+
+It is switched off. Without `--answers` in `paper_platform.run` or `paper_platform.trial` (or `answers=` in `Session`) no answer is read, no journal row of a new kind is written, and the receipt says only `"answers": {"on": false}`. With a source on, the receipt's `answers` entry says how many answers were taken, applied and not applied, the SHA-256 of the answers as taken in order, and that the causal check covers only the rules' own decisions without answers.
+
+1. An answer is a journaled input with its own tape time. At the start of a step, before that tape message is applied, the session takes the waiting answers and writes each as a journal row of kind `answer` at the receive time of that message. They are applied in the order they arrived; the wall clock decides nothing. Nothing is taken while the run is only warming before its start point, or on a vendor snapshot.
+2. An answer changes only what comes after its row. It never changes an order its signal already sent, nor any row before it.
+3. `rule_off`: from its row on, the rule's opening signals are still journaled and send no order (and no manager follows them), the same way an unselected rule's signals are, until a `rule_on`. Trades the rule already holds are untouched.
+4. `close` closes the named open trade with the rule's own closing instruction, reason `answer <id>`. The hold rule in force is the give-back exit and a close answer overrides it, so a close is applied only when the session was started with `answer_close=True` (`--answer-close` in a trial; the paced run has no such switch). Otherwise the row says `applied: false` and why.
+5. An answer that is malformed, repeats an id, names an unknown rule or a rule the plan sends no orders for, names a trade that is not open, or switches a rule to the state it is already in, is journaled with `applied: false` and the reason. It never stops a run.
+6. The receipt says it (see above).
+
+A trial is not paced, so each answer in a trial's file carries `not_before_tape_ns`, the tape time before which it must not be taken; a file without it is refused. Such a file is written before the trial and is an input like the plan. The trial hands an answer over at the first step whose message is at or after that time, in the order of the file. The paced run reads a local file that something else appends to while it goes (`--answers <file>`); a partly written last line waits. Nothing fetches answers from a branch or a network.
+
+NOTHING OF THIS HAS BEEN RUN. The proof that a run with nothing plugged in is row for row the same as before needs one pass of the tape through the engine, which waits for Greg's go.
