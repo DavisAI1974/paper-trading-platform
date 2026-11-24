@@ -75,7 +75,7 @@ class Session:
         self.execution = None
         if execution_plan is not None:
             from .paper_execution import PaperExecution
-            self.execution = PaperExecution(execution_plan, self.rules, self.write)
+            self.execution = PaperExecution(execution_plan, self.rules, self.write, run=self.run)
         self.rule_commits = {
             key: git(code, "log", "-1", "--format=%H", self.revision, "--", f"paper_platform/rules/{key}.json")
             for key in self.rules

@@ -1,6 +1,7 @@
 """One native Nautilus L3 matching engine per agent-configured rule."""
 
 from collections import defaultdict
+from fractions import Fraction
 from threading import Lock
 
 from nautilus_trader.backtest.engine import OrderMatchingEngine
@@ -59,6 +60,11 @@ class RuleVenue:
         self.orders = {}
         self.active_orders = defaultdict(set)
         self.inventory = defaultdict(int)
+        # For the give-back exit only: what each trade's own fills paid and took, and its highest open profit.
+        self.cash = defaultdict(int)
+        self.peak = {}
+        self.exit_attempts = defaultdict(int)
+        self.holding = set()
         self.reference = None
         self.received = None
         self.known_received_ns = None
@@ -81,6 +87,13 @@ class RuleVenue:
         if isinstance(event, OrderFilled):
             qty = int(event.last_qty)
             self.inventory[key] += qty if event.order_side == OrderSide.BUY else -qty
+            paid = (event.last_px.raw // DBN_TO_NATIVE) * qty
+            self.cash[key] += -paid if event.order_side == OrderSide.BUY else paid
+            if self.inventory[key]:
+                self.holding.add(key)
+            else:
+                self.holding.discard(key)
+                self.peak.pop(key, None)
             self.emit("fill", **data, **self.book_quote, fill_received_ns=self.known_received_ns,
                       fill_id=str(event.trade_id), quantity=qty,
                       fill_price=event.last_px.raw // DBN_TO_NATIVE,
@@ -172,7 +185,20 @@ class RuleVenue:
 
 
 class PaperExecution:
-    def __init__(self, plan, rules, emit):
+    def __init__(self, plan, rules, emit, run=None):
+        self.run = run
+        # Greg, 2026-11-24: "We should try a simple exit strategy. Sell when we give 20% from highest profit
+        # value back once we enter trade." A plan that carries {"exit": {"give_back_fraction": "0.2"}} closes
+        # each paper trade that way and no longer closes it on its rule's own close. A plan without it is
+        # executed as before.
+        exit_policy = plan.get("exit")
+        self.give_back = None
+        if exit_policy is not None:
+            if not isinstance(exit_policy, dict) or exit_policy.keys() != {"give_back_fraction"} or run is None:
+                raise ValueError("the plan's exit takes give_back_fraction alone, and the run's ID for its order tags")
+            self.give_back = Fraction(str(exit_policy["give_back_fraction"]))
+            if not 0 < self.give_back < 1:
+                raise ValueError("give_back_fraction is a part of the highest profit, above 0 and below 1")
         self.instrument = FuturesContract.from_dict(plan["instrument"])
         self.raw_id = plan["databento_instrument_id"]
         planned = plan["rules"]
@@ -248,10 +274,46 @@ class PaperExecution:
                 venue.engine.process_order_book_delta(update)
             if trade is not None:
                 venue.engine.process_trade_tick(trade)
+        if self.give_back is not None:
+            self.exit_on_give_back(msg, reference, received)
+
+    def exit_on_give_back(self, msg, reference, received):
+        """Close a paper trade once its open profit has fallen back by the plan's fraction of its highest.
+
+        The open profit of a trade is what its own fills paid and took, plus what its contracts would fetch
+        now on the side they would be closed at: the best bid for contracts held long, the best ask for
+        contracts held short. No mid. It is read at each message, on that message's own book, and the order
+        goes at that message's time. The exit is armed only once the highest open profit is above zero; a
+        trade that never shows a profit is not closed by it and is held until the run stops.
+        """
+        for rule, venue in self.venues.items():
+            for key in sorted(venue.holding):
+                held = venue.inventory[key]
+                quote = msg["best_bid"] if held > 0 else msg["best_ask"]
+                if quote is None or venue.active_orders.get(key):
+                    continue
+                profit = venue.cash[key] + held * quote
+                peak = max(venue.peak.get(key, profit), profit)
+                venue.peak[key] = peak
+                if peak <= 0 or profit > peak * (1 - self.give_back):
+                    continue
+                venue.exit_attempts[key] += 1
+                event = dict(rule=rule, trade_id=key, action="close", received=received, reference=reference,
+                             bid=msg["best_bid"], ask=msg["best_ask"], side="buy" if held > 0 else "sell",
+                             exit_policy="give back", highest_open_profit=peak, open_profit=profit,
+                             reason=f"gave back {float(self.give_back):.0%} of its highest open profit")
+                venue.submit(event, {"style": "cross", "offset_ticks": 0}, abs(held),
+                             f"{self.run}-giveback-{rule}-{key}-{venue.exit_attempts[key]}")
 
     def instructions(self, signal):
         """Route the originating signal and any independently configured manager orders."""
         parent = signal["rule"]
+        if (self.give_back is not None and signal["action"] in ("close", "exit")
+                and signal.get("trade_data") is not False and signal["reason"] != "trade day ended"):
+            # Under the give-back exit a rule's own close stays a research signal in the journal and sends no
+            # order: the paper trade is closed by the give-back. The end of the trade day and every
+            # administrative close still close it.
+            return
         if parent in self.venues:
             if signal["action"] == "exit":
                 # The research signal remains an exit indication. The actual order

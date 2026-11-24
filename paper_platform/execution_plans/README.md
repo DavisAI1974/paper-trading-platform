@@ -27,3 +27,7 @@ python -m paper_platform.assemble_execution_plan ../markets-data <markets-data-c
 ```
 
 The output is `paper_platform/execution_plans/ngx3-<full-markets-data-commit>.json`. The revision in its name identifies the original answers, their attributions and the October 1 NGX3 definition. The assembler reports explicitly undecided rules and their reasons. If all decisions remain open, it leaves the plan directory untouched. A new set of decisions gets a new filename. Select the committed filename in the manual workflow after Greg authorizes a paper session.
+
+## A plan with the give-back exit
+
+`ngx3-12be6ea6e40347def5f574b1c2f36093bba99200-giveback20.json` is the committed family-agent plan above with one entry added, `"exit": {"give_back_fraction": "0.2"}`, on Greg's word of November 24. Every rule's placement, size and manager entries are the agents', unchanged. With the entry, each paper trade is closed when its open profit falls back by that part of its highest, and a rule's own close sends no order. What that leaves open is written under item 17 of the checklist. The plan without the entry is still the one to select for a run of the rules' own closes.
