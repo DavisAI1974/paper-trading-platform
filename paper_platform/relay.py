@@ -26,6 +26,11 @@ class Packet(BaseModel):
     status: dict
 
 
+class QuoteBatch(BaseModel):
+    run: str = Field(min_length=1, max_length=64)
+    samples: list[list[int | None]] = Field(min_length=1, max_length=2000)
+
+
 class JournalBatch(BaseModel):
     packets: list[Packet] = Field(min_length=1, max_length=128)
 
@@ -65,6 +70,8 @@ def relay():
                 run, json_extract(body,'$.rule'), json_extract(body,'$.trade_id'), sequence
             ) WHERE json_extract(body,'$.trade_id') IS NOT NULL;
             CREATE TABLE IF NOT EXISTS sessions(run TEXT PRIMARY KEY, body TEXT NOT NULL, first_ns TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS quotes(run TEXT, received INTEGER, bid INTEGER, ask INTEGER,
+                PRIMARY KEY(run, received));
         """)
 
     def viewer(authorization: str = Header(default="")):
@@ -129,6 +136,16 @@ def relay():
                 result = append_packet(db, packet)
             return result
 
+    @app.post("/quotes", dependencies=[Depends(authorize_writer)])
+    def quote_samples(batch: QuoteBatch):
+        # For the price graph only: the best bid and best ask at one tape instant each. Never a mid.
+        if any(len(sample) != 3 or sample[0] is None for sample in batch.samples):
+            raise HTTPException(422, "a sample is a tape time, a bid and an ask")
+        with connect() as db:
+            db.executemany("INSERT OR IGNORE INTO quotes VALUES(?,?,?,?)",
+                           [(batch.run, *sample) for sample in batch.samples])
+        return {"stored": len(batch.samples)}
+
     def session_state(db, run, market):
         if run:
             row = db.execute(
@@ -167,6 +184,46 @@ def relay():
             db.execute("BEGIN")
             state = session_state(db, run, market)
             return trade_rows(db, state.get("run"), rule)
+
+    @app.get("/api/chart", dependencies=[Depends(viewer)])
+    def chart(run: str | None = None, market: str = "nymex-ng", rule: str = "", known: str = "",
+              after_ns: str = "-1", after_seq: int = -1):
+        """The price graph's points since the page last asked: bid and ask samples, and this run's paper fills.
+        Times go out in milliseconds, which a browser holds exactly; the cursor stays in nanoseconds as text."""
+        profiles = markets()
+        if market not in profiles or (rule and rule not in profiles[market]["rules"]):
+            raise HTTPException(404, "unknown market or rule")
+        if not after_ns.lstrip("-").isdigit():
+            raise HTTPException(400, "invalid graph cursor")
+        profile = profiles[market]
+        with connect() as db:
+            db.execute("BEGIN")
+            state = session_state(db, run, market)
+            current = state.get("run")
+            if current != known:
+                after_ns, after_seq = "-1", -1  # another run than the page holds: from its beginning
+            samples = fills = []
+            if current:
+                samples = db.execute(
+                    "SELECT received,bid,ask FROM quotes WHERE run=? AND received>? ORDER BY received LIMIT 4000",
+                    (current, int(after_ns))).fetchall()
+                conditions, args = "", [current, after_seq]
+                if rule:
+                    conditions, args = " AND json_extract(body,'$.rule')=?", [current, after_seq, rule]
+                fills = db.execute(
+                    "SELECT sequence,body FROM events WHERE run=? AND sequence>? "
+                    "AND json_extract(body,'$.kind')='fill'" + conditions + " ORDER BY sequence LIMIT 2000",
+                    args).fetchall()
+        marks = []
+        for _, body in fills:
+            fill = json.loads(body)
+            marks.append([int(fill.get("fill_received_ns", fill["received"])) // 1_000_000, int(fill["fill_price"]),
+                          fill["side"], fill["action"], fill["rule"], fill.get("trade_data") is not False])
+        return dict(run=current or "", status=state.get("status"), scale=profile["price_scale"],
+                    unit=profile["price_unit"],
+                    quotes=[[received // 1_000_000, bid, ask] for received, bid, ask in samples],
+                    next_ns=str(samples[-1][0]) if samples else after_ns,
+                    fills=marks, next_seq=fills[-1][0] if fills else after_seq)
 
     def recent_runs(db, market):
         return db.execute(

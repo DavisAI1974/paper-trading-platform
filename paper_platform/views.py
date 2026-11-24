@@ -41,6 +41,24 @@ def eastern_time(received):
     return f"{day} · {moment:%H:%M:%S}.{nanos:09d} {moment:%Z} (Eastern clock date {moment:%Y-%m-%d})"
 
 
+def result_line(trade, profile):
+    """One trade's own P/L from its own paper fills, gross. Empty until the trade holds no contract."""
+    result = trade.get("result")
+    if not result:
+        return ""
+    points = Decimal(result["price_sum"]) / profile["price_scale"]
+    contracts = result["contracts"]
+    over = f"{points:+f} {e(profile['price_unit'])} over {contracts} contract{'s' if contracts != 1 else ''}"
+    size = profile.get("contract_size")
+    if size:
+        dollars = points * size
+        amount = f"{'-' if dollars < 0 else '+'}${abs(dollars):,.2f}"
+        over = f"{amount} · {over} of {size:,} {e(profile['contract_unit'])}"
+    stop = (" · closed by the run's own stop: an administrative close, not trade data"
+            if result["administrative"] else "")
+    return (f"<span class='trade-end'><b>P/L · paper fills, no trade cost</b> · {over}{stop}</span>")
+
+
 def trade_card(trade, profile):
     def time_at(event):
         return eastern_time(event.get("fill_received_ns", event["received"]))
@@ -111,6 +129,7 @@ def trade_card(trade, profile):
     fields = [f'<details id="trade-{e(rule)}-{e(key)}" class="trade-row"><summary><b>{e(rule)} · {e(side)}</b>',
               endpoint(enter_label, timing["time_in"], no_entry, entry_intent),
               endpoint(exit_label, timing["time_out"], no_exit, exit_intent),
+              result_line(trade, profile),
               f'</summary><small>Trade · {e(key)}</small>']
     if entry and (entry["rule"] != rule or entry["kind"] == "signal"):
         label = "Parent entry" if entry["rule"] != rule else "Entry"
@@ -313,6 +332,10 @@ def page(market, rule, state, history=(), *, live=True, run="", trades=(), runs=
         stream_params.update(latest=1, displayed=displayed)
     query = urlencode(stream_params)
     latest_url = "/?" + urlencode(dict(market=market, rule=rule))
+    chart_params = dict(market=market, rule=rule or "")
+    if run:
+        chart_params["run"] = run
+    chart = "/api/chart?" + urlencode(chart_params) if live and not archived_page else ""
     return Template(Path(__file__).with_name("monitor.html").read_text(encoding="utf8")).substitute(
         title=e(profile["name"]),
         asset=e(profile["asset"]),
@@ -339,4 +362,6 @@ def page(market, rule, state, history=(), *, live=True, run="", trades=(), runs=
         ),
         cards="".join(card(row, profile) for row in reversed(history)),
         stream=e("/stream?" + query) if live and not archived_page else "",
+        chart=e(chart),
+        hide_chart="" if chart else "hidden",
     )

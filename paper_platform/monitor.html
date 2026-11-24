@@ -11,12 +11,22 @@ form{display:flex;gap:.7rem;align-items:end;flex-wrap:wrap;margin:1rem 0}label{d
 .trade-row{padding:.6rem 0;border-bottom:1px solid #344146}.trade-row summary{font-variant-numeric:tabular-nums}.trade-end{display:block;margin:.35rem 0;overflow-wrap:anywhere}
 details li{overflow-wrap:anywhere}a{color:#9ce6ba}
 .spec{white-space:pre-wrap;color:#ccdad7}summary{cursor:pointer}
+#chart h2{margin:.8rem 0 .3rem}#chart-ranges{display:flex;gap:.5rem;margin:.3rem 0}#chart-ranges button[aria-pressed=true]{border-color:#9ce6ba;color:#9ce6ba}
+#chart-box{position:relative}#chart-canvas{display:block;width:100%;height:16rem;touch-action:pan-y}
+#chart-tip{position:absolute;top:.3rem;left:.3rem;padding:.3rem .5rem;background:#1b292a;border:1px solid #70817b;border-radius:.3rem;font-size:.85rem;pointer-events:none}
+#chart-tip b{color:#edf1ee}.sw{display:inline-block;width:.9rem;height:.2rem;vertical-align:middle;margin:0 .3rem 0 .6rem}
 </style><script defer src="/static/htmx-2.0.8/htmx.min.js"></script></head><body hx-history="false">
 <header><small>$venue · $asset · Paper trading</small><h1>$title</h1><small id="run-info" $hide_run>Run <a id="current-run" href="$run_url">$displayed_run</a> <span id="trade-day">$trade_day</span></small>
 <p id="status" role="status">$status</p><small id="connection" role="status"></small>$latest_link<div id="stop-details">$stop_details</div></header>
 <form method="get" action="/" hx-boost="true" hx-push-url="true" $hide_filters><input type="hidden" name="run" value="$run"><label>Market<select name="market">$markets</select></label><label>Strategy<select name="rule">$rules</select></label><button>Show</button></form>
 <div id="run-history">$run_history</div>
 $definition
+<section id="chart" data-url="$chart" aria-labelledby="chart-title" $hide_chart><h2 id="chart-title">Price</h2>
+<div id="chart-ranges" role="group" aria-label="Span of tape shown"><button type="button" data-minutes="5" aria-pressed="true">5 min</button><button type="button" data-minutes="30" aria-pressed="false">30 min</button><button type="button" data-minutes="0" aria-pressed="false">All</button></div>
+<div id="chart-box"><canvas id="chart-canvas" role="img" aria-label="Best ask and best bid over tape time, with this run's paper fills"></canvas><div id="chart-tip" hidden></div></div>
+<small><span class="sw" style="background:#d95926;margin-left:0"></span>Best ask<span class="sw" style="background:#3987e5"></span>Best bid · &#9650; paper buy · &#9660; paper sell · solid opens a trade, hollow closes one</small>
+<small id="chart-last" role="status"></small>
+<small>Tape time on the Eastern clock. One point for each second of tape: the best bid and the best ask at the first message of that second. No mid price is drawn or computed.</small></section>
 $trade_section
 <section id="events" data-stream="$stream" aria-label="Trading events">$cards</section>
 <div id="earlier-events">$earlier</div>
@@ -75,5 +85,109 @@ if(list.dataset.stream){
   });
   stream.onerror=()=>{connection.textContent='Reconnecting…'};
 }
+})();
+
+(()=>{
+const box=document.getElementById('chart');
+if(!box||!box.dataset.url) return;
+const canvas=document.getElementById('chart-canvas'),ctx=canvas.getContext('2d');
+const tip=document.getElementById('chart-tip'),last=document.getElementById('chart-last');
+const INK='#edf1ee',MUTED='#b5c6c5',GRID='#344146',SURFACE='#10191c',ASK='#d95926',BID='#3987e5';
+let quotes=[],fills=[],run='',nextNs='-1',nextSeq=-1,scale=1,unit='',minutes=5,pointer=null,busy=false,view=null;
+const clock=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+const price=v=>v===null?'none':(v/scale).toFixed(3);
+function triangle(x,y,up,solid){
+  const r=5,d=up?1:-1;
+  ctx.beginPath();ctx.moveTo(x,y-d*r);ctx.lineTo(x+r,y+d*r);ctx.lineTo(x-r,y+d*r);ctx.closePath();
+  ctx.lineWidth=4;ctx.strokeStyle=SURFACE;ctx.stroke();
+  ctx.fillStyle=solid?INK:SURFACE;ctx.fill();
+  ctx.lineWidth=1.5;ctx.strokeStyle=INK;ctx.stroke();
+}
+function draw(){
+  const ratio=window.devicePixelRatio||1,w=canvas.clientWidth,h=canvas.clientHeight;
+  if(canvas.width!==Math.round(w*ratio)||canvas.height!==Math.round(h*ratio)){canvas.width=Math.round(w*ratio);canvas.height=Math.round(h*ratio)}
+  ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,w,h);view=null;
+  if(!quotes.length){last.textContent=run?'No quote sample has reached the page for this run.':'';tip.hidden=true;return}
+  const end=quotes[quotes.length-1][0],first=quotes[0][0],start=minutes?Math.max(first,end-minutes*60000):first;
+  const shown=quotes.filter(q=>q[0]>=start),marks=fills.filter(f=>f[0]>=start&&f[0]<=end);
+  let lo=Infinity,hi=-Infinity;
+  for(const q of shown) for(const v of [q[1],q[2]]) if(v!==null){lo=Math.min(lo,v);hi=Math.max(hi,v)}
+  for(const f of marks){lo=Math.min(lo,f[1]);hi=Math.max(hi,f[1])}
+  if(lo===Infinity) return;
+  const pad=Math.max((hi-lo)*0.08,scale/1000);lo-=pad;hi+=pad;
+  const L=6,R=w-52,T=8,B=h-20,span=Math.max(end-start,1);
+  const x=t=>L+(t-start)/span*(R-L),y=v=>T+(hi-v)/(hi-lo)*(B-T);
+  ctx.font='12px system-ui,sans-serif';ctx.textBaseline='middle';ctx.lineWidth=1;
+  for(let i=0;i<=3;i++){
+    const v=lo+(hi-lo)*i/3,gy=Math.round(y(v))+0.5;
+    ctx.strokeStyle=GRID;ctx.beginPath();ctx.moveTo(L,gy);ctx.lineTo(R,gy);ctx.stroke();
+    ctx.fillStyle=MUTED;ctx.textAlign='left';ctx.fillText(price(v),R+5,gy);
+  }
+  ctx.textBaseline='alphabetic';ctx.fillStyle=MUTED;
+  ctx.textAlign='left';ctx.fillText(clock.format(new Date(start)),L,h-5);
+  ctx.textAlign='right';ctx.fillText(clock.format(new Date(end)),R,h-5);
+  for(const [index,color] of [[2,ASK],[1,BID]]){
+    ctx.strokeStyle=color;ctx.lineWidth=2;ctx.lineJoin='round';ctx.beginPath();
+    let open=false,py=0;
+    for(const q of shown){
+      const v=q[index];
+      if(v===null){open=false;continue}
+      const qx=x(q[0]),qy=y(v);
+      if(open){ctx.lineTo(qx,py);ctx.lineTo(qx,qy)}else{ctx.moveTo(qx,qy);open=true}
+      py=qy;
+    }
+    if(open) ctx.lineTo(R,py);
+    ctx.stroke();
+  }
+  for(const f of marks) triangle(x(f[0]),y(f[1]),f[2]==='buy',f[3]==='open');
+  const newest=quotes[quotes.length-1];
+  last.textContent='Last sample · ask '+price(newest[2])+' · bid '+price(newest[1])+' '+unit+' · '+clock.format(new Date(newest[0]))+' Eastern, tape time';
+  view={shown,x,L,R,T,B};
+  hover();
+}
+function hover(){
+  if(!view||pointer===null||!view.shown.length){tip.hidden=true;return}
+  let near=view.shown[0];
+  for(const q of view.shown) if(Math.abs(view.x(q[0])-pointer)<Math.abs(view.x(near[0])-pointer)) near=q;
+  const hx=Math.round(view.x(near[0]))+0.5;
+  ctx.strokeStyle=MUTED;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(hx,view.T);ctx.lineTo(hx,view.B);ctx.stroke();
+  tip.replaceChildren();
+  for(const [label,value] of [['ask',price(near[2])],['bid',price(near[1])]]){
+    const strong=document.createElement('b');strong.textContent=value;
+    tip.append(strong,' '+label+' · ');
+  }
+  tip.append(clock.format(new Date(near[0]))+' Eastern');
+  tip.hidden=false;
+}
+canvas.addEventListener('pointermove',event=>{pointer=event.offsetX;draw()});
+canvas.addEventListener('pointerdown',event=>{pointer=event.offsetX;draw()});
+canvas.addEventListener('pointerleave',()=>{pointer=null;draw()});
+for(const button of document.querySelectorAll('#chart-ranges button')) button.addEventListener('click',()=>{
+  minutes=Number(button.dataset.minutes);
+  for(const other of document.querySelectorAll('#chart-ranges button')) other.setAttribute('aria-pressed',String(other===button));
+  draw();
+});
+window.addEventListener('resize',draw);
+async function poll(){
+  if(!document.body.contains(box)){clearInterval(timer);return}
+  if(busy||document.hidden) return;
+  busy=true;
+  try{
+    const url=new URL(box.dataset.url,location.href);
+    url.searchParams.set('known',run);url.searchParams.set('after_ns',nextNs);url.searchParams.set('after_seq',nextSeq);
+    const response=await fetch(url,{headers:{Accept:'application/json'}});
+    if(response.ok){
+      const data=await response.json();
+      if(data.run!==run){quotes=[];fills=[];run=data.run}
+      scale=data.scale;unit=data.unit;nextNs=data.next_ns;nextSeq=data.next_seq;
+      for(const q of data.quotes) quotes.push(q);
+      for(const f of data.fills) fills.push(f);
+      draw();
+    }
+  }catch(error){}
+  finally{busy=false}
+}
+const timer=setInterval(poll,2000);
+poll();
 })();
 </script></body></html>

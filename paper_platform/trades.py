@@ -67,6 +67,30 @@ def _timing(row):
                 open_contracts=abs(held) if entered is not None or not row["fills"] else None)
 
 
+def _result(row):
+    """The trade's own paper fills, sold against bought, once it holds no contract. Gross: no fee, no
+    slippage, nothing taken off (Greg, 2026-11-24: "p/l for each trade"). One trade, one figure: nothing
+    here is summed, averaged or ranked across trades. `price_sum` is in the tape's price units, summed
+    over the contracts of this trade."""
+    held = price_sum = closed = 0
+    administrative = False
+    for fill in row["fills"]:
+        qty, price = int(fill["quantity"]), int(fill["fill_price"])
+        if fill["side"] == "buy":
+            held += qty
+            price_sum -= price * qty
+        else:
+            held -= qty
+            price_sum += price * qty
+        if fill["action"] != "open":
+            closed += qty
+            # A close made by the run's own stop is not trade data (item 20). The figure is shown with that said.
+            administrative = administrative or fill.get("trade_data") is False
+    if not closed or held:
+        return None
+    return dict(price_sum=price_sum, contracts=closed, administrative=administrative)
+
+
 def trade_rows(db, run, rule=None, *, trade_id=None, through=None):
     where = ["run=?", "json_extract(body,'$.trade_id') IS NOT NULL"]
     params = [run]
@@ -139,4 +163,5 @@ def trade_rows(db, run, rule=None, *, trade_id=None, through=None):
     ordered = list(reversed(rows.values()))
     for row in ordered:
         row["timing"] = _timing(row)
+        row["result"] = _result(row)
     return ordered

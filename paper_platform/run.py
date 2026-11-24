@@ -255,7 +255,7 @@ def main():
         push_url = writer_remote(args.data)
     except ValueError as error:
         refuse(str(error))
-    s = pub = journal = None
+    s = pub = journal = send_quotes = None
     # A run of the stored tape fed at live pace is a paper run. Only the replay of an earlier run's
     # receipt is told to the phone as a replay.
     activity = "paper replay" if args.replay_receipt else "paper run"
@@ -359,6 +359,30 @@ def main():
         watcher.start()
 
         page_done = threading.Event()
+        quotes = deque()
+        quote_second = [None]
+
+        def sample_quote(message):
+            # For the page's price graph: the best bid and the best ask as they stand at the first
+            # in-session message of each second of tape. A sample, never a mid and never an average. It is
+            # not journaled (the tape holds every quote) and no rule reads it.
+            if message is None or page_feeder is None or not message.get("in_session"):
+                return
+            received = message["raw"]["ts_recv"]
+            if received // 1_000_000_000 != quote_second[0]:
+                quote_second[0] = received // 1_000_000_000
+                quotes.append((received, message["best_bid"], message["best_ask"]))
+
+        def send_quotes():
+            while quotes:
+                count = min(len(quotes), 1000)
+                batch = [list(quotes[i]) for i in range(count)]
+                response = pub.http.post(pub.url + "/quotes", json=dict(run=s.run, samples=batch), timeout=8,
+                                         allow_redirects=False)
+                if response.status_code != 200:
+                    raise RuntimeError("the page did not take the quote samples")
+                for _ in range(count):
+                    quotes.popleft()
 
         def feed_page():
             # The phone page is a view; markets-data is the record. With --keep-tape-pace a slow or failed
@@ -367,6 +391,7 @@ def main():
             while not page_done.is_set():
                 try:
                     pub.deliver_pending(pending)
+                    send_quotes()
                 except Exception as error:
                     print("phone page post failed, trying again: " + type(error).__name__, flush=True)
                     page_done.wait(2)
@@ -394,7 +419,9 @@ def main():
                 break
             deliver()
             if s.captured:
-                if s.step(s.cursor) is None and s.state == "active":
+                message = s.step(s.cursor)
+                sample_quote(message)
+                if message is None and s.state == "active":
                     stopped.wait(0.1)
                 continue
             # Peek at the next raw receive time without exposing it to any strategy.
@@ -416,7 +443,7 @@ def main():
                     pace_to_record(s, int(r["ts_recv"]), base, stopped, deliver=deliver)
             if stopped.is_set() or s.due():
                 continue
-            s.step(s.cursor)
+            sample_quote(s.step(s.cursor))
         if s.state != "active":
             why = s.state
     except PreflightDeadline as error:
@@ -460,11 +487,17 @@ def main():
             # The rows of the stop reach the page here. With --keep-tape-pace a failed post is tried again.
             for attempt in range(6):
                 try:
-                    return pub.deliver_pending(pending, final=True)
+                    pub.deliver_pending(pending, final=True)
+                    break
                 except Exception:
                     if not args.keep_tape_pace or attempt == 5:
                         raise
                     time.sleep(2 ** attempt)
+            if send_quotes is not None:
+                try:
+                    send_quotes()  # the graph's last samples; the journal above is what must arrive
+                except Exception as error:
+                    print("the graph's last samples did not reach the page: " + type(error).__name__, flush=True)
 
         if journal is not None:
             with ThreadPoolExecutor(max_workers=1, thread_name_prefix="render-journal") as relay:
