@@ -128,7 +128,14 @@ class Publication:
         status["status"] = (
             event["reason"] if event["kind"] == "status" and event["reason"] != "started" else "active"
         )
-        return {"event": wire(event), "status": status}
+        if status["status"] == "active":
+            status.pop("capture_end", None)
+        else:
+            status["capture_end"] = event.get("capture_end")
+            status["last_source"] = event.get("last_source")
+            if "remaining_paper_inventory" in event:
+                status["paper_inventory"] = event["remaining_paper_inventory"]
+        return {"event": wire(event), "status": wire(status)}
 
     def post_again(self, event):
         response = self.http.post(
@@ -247,7 +254,7 @@ def main():
                     continue
                 if stopped_here:
                     try:
-                        notify(s.state, s.run)
+                        notify(s.stop_notice(), s.run)
                         alert_sent.set()
                     except (requests.RequestException, RuntimeError):
                         pass
@@ -319,7 +326,7 @@ def main():
                 errors.append("close")
         try:
             if not alert_sent.is_set():
-                notify(why, s.run if s else "preflight")
+                notify(s.stop_notice() if s is not None else why, s.run if s else "preflight")
         except Exception:
             errors.append("phone")
         if pub is not None:
