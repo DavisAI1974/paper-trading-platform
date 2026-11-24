@@ -133,6 +133,18 @@ class CapturedFeed:
                 if not batch:
                     if not follow or not state or state[0] != "recording":
                         return
+                    # The OS releases the lock even if a writer dies before marking its status.
+                    with self.path.with_suffix(".lock").open("rb") as lock:
+                        try:
+                            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                        except BlockingIOError:
+                            pass
+                        else:
+                            # A final batch may have committed after our snapshot.
+                            last = db.execute("SELECT MAX(position) FROM frames").fetchone()[0]
+                            if last is None or last < position:
+                                return
+                            continue
                     time.sleep(0.1)
                     continue
                 for index, body, received_ns in batch:
