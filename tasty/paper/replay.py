@@ -26,6 +26,7 @@ from tasty.paper.lines import LiveLines
 from tasty.paper.quotes_live import LiveLegs, LiveQuotes
 from tasty.paper.rule_base import CLOSE, EXIT, INDICATION, OPEN, Snapshot
 from tasty.paper.rules_cl import all_rules
+from tasty.paper.rules_cx import all_rules as cx_rules
 
 CODE_REPO = Path(__file__).resolve().parents[2]
 
@@ -39,7 +40,7 @@ class Engine:
     def __init__(self, rules=None):
         self.lines, self.quotes, self.legs, self.ledger = LiveLines(), LiveQuotes(), LiveLegs(), Ledger()
         self.lines_every_print = LiveLines(every_print=True)     # for the rules that read every print
-        self.rules = all_rules() if rules is None else rules
+        self.rules = (all_rules() + cx_rules()) if rules is None else rules
         self.n_prints = self.n_unsided = self.n_quote_messages = 0
         self.prints = []
         self.pending_runs, self.pending_legs = [], []
