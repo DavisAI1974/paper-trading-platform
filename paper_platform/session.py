@@ -36,6 +36,7 @@ class Session:
         started=None, execution_plan=None, captured=None, plan_source=None,
     ):
         self.started = time.monotonic() if started is None else started
+        self.trade_day = trade_day.isoformat()
         self.market = replay_market(market_key)
         self.data_root = Path(data_root).resolve()
         origin = git(self.data_root, "remote", "get-url", "origin").lower().removesuffix(".git")
@@ -275,6 +276,7 @@ class Session:
                 run=self.run,
                 market=self.market["id"],
                 status=self.state,
+                trade_day=self.trade_day,
                 cursor=self.cursor,
                 events=self.events,
                 open_positions=self.engine.position_count,
