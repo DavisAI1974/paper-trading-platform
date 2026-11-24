@@ -156,6 +156,23 @@ def pace_to_record(session, received, base, stopped, publication, deliver):
             return
 
 
+def read_execution_plan(args):
+    if args.execution_plan:
+        return json.loads(args.execution_plan.read_text(encoding="utf-8")), args.execution_plan.name
+    selector = args.agent_plan
+    if selector is None:
+        return None, None
+    if selector.lstrip().startswith("{"):
+        return json.loads(selector), "workflow input"
+    root = Path(__file__).resolve().parent / "execution_plans"
+    if Path(selector).name != selector or not selector.endswith(".json"):
+        raise ValueError("supply an agent plan filename ending in .json or a JSON object")
+    path = (root / selector).resolve()
+    if path.parent != root:
+        raise ValueError("named plans belong in paper_platform/execution_plans")
+    return json.loads(path.read_text(encoding="utf-8")), f"paper_platform/execution_plans/{selector}"
+
+
 def main():
     started = time.monotonic()
     p = argparse.ArgumentParser()
@@ -165,7 +182,9 @@ def main():
     p.add_argument("--message-budget", type=int, required=True)
     p.add_argument("--event-budget", type=int, required=True)
     p.add_argument("--capture", type=Path)
-    p.add_argument("--execution-plan", type=Path)
+    plans = p.add_mutually_exclusive_group()
+    plans.add_argument("--execution-plan", type=Path)
+    plans.add_argument("--agent-plan")
     p.add_argument("--greg-go", action="store_true")
     args = p.parse_args()
     if not args.greg_go:
@@ -186,6 +205,7 @@ def main():
     why = "failure"
     try:
         requests.get(url + "/health", timeout=90).raise_for_status()
+        execution_plan, plan_source = read_execution_plan(args)
         s = Session(
             args.data,
             args.trade_day,
@@ -193,7 +213,7 @@ def main():
             output_budget=args.event_budget,
             market_key=args.market,
             started=started, captured=args.capture,
-            execution_plan=json.loads(args.execution_plan.read_text()) if args.execution_plan else None,
+            execution_plan=execution_plan, plan_source=plan_source,
         )
         pub = Publication(s, url, push_url)
         pending = deque()
