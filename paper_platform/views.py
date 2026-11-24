@@ -138,7 +138,9 @@ def trade_card(trade, profile):
             label = "Administrative close instruction" if attempt.get("trade_data") is False else "Exit instruction"
         fields.append(leg(label + " · No order sent", attempt))
     if trade["observation"]:
-        fields.append(f"<p>{e(trade['observation']['reason'])}</p>")
+        observation = trade["observation"]
+        fields.append(f"<p>{e(observation['reason'])} · {time_at(observation)}</p>"
+                      f"<small>Source record · {e(observation.get('reference'))}</small>")
     exposure = trade.get("interruption_exposure")
     if exposure:
         fields.append(f"<p>At observation stop · {time_at(exposure)} · "

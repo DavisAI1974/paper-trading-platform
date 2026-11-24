@@ -136,6 +136,7 @@ class Engine:
                         side=idea["side"],
                         management_only=True,
                         arm_reference=(state["p"] if state else self.p)["reference"],
+                        **({"trade_data": False} if missing else {}),
                     )
                 )
                 if state is not None and (missing or action == "release warning"):
@@ -350,6 +351,7 @@ class Engine:
                                 "not scored: the feed lacks " + ", ".join(sorted(set(missing))),
                                 t,
                                 None,
+                                trade_data=False,
                             )
                         )
             self.p = t
