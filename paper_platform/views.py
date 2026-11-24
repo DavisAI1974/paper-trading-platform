@@ -56,6 +56,10 @@ def card(event, profile):
         f"<strong>{e(' · '.join(str(event[k]) for k in ('rule', 'kind', 'action') if event.get(k)))}</strong>",
         f"<p>{e(event.get('reason', ''))}</p>",
     ]
+    if event.get("kind") == "fill":
+        fields.append(f"<small>{e(event['side'])} {e(event['quantity'])} @ "
+                      f"{price(event['fill_price'], profile)} {e(profile['price_unit'])} · {e(event['liquidity'])}</small>")
+        fields.append(f"<small>Order {e(event['order_id'])} · Fill {e(event['fill_id'])}</small>")
     if event.get("entry"):
         fields.append(f"<small>Entry · {prices(event['entry'], profile)} · {e(event['entry']['received'])} ns</small>")
     if "bid" in event or "ask" in event:

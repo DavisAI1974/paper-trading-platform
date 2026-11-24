@@ -175,5 +175,5 @@ class PaperExecution:
                     venue.emit("paper order", **event, order_id=identifier, pricing="native L3")
                     venue.submit(event, "cross", abs(held), identifier)
                     if venue.inventory[key]:
-                        venue.emit("status", **event, remaining_contracts=venue.inventory[key],
+                        venue.emit("order status", **event, remaining_contracts=venue.inventory[key],
                                    execution_event="unfilled administrative remainder")
