@@ -14,7 +14,7 @@
 
   **In progress.** All 30 rule files are available. End-to-end operation depends on Frankie’s and the agents’ execution choices. Six manager rules reference a parent entry.
 
-  **Ccode, November 24. Waiting on item 17.** The item 17 plan names which rules take part and each manager's parent entries. No plan exists yet, so the wiring for a selected rule or manager has not been started.
+  **Ccode, November 24. All 30 accounted for in the plan; the wiring review is not finished.** Read from the [NGX3 plan](../../paper_platform/execution_plans/ngx3-599eb8c0d48926292bbb4ef83fd518d5d2753daf.json): all 30 rule IDs are in it, each with one contract, no tick offset and a crossing close. Opening orders: `cross` for CL05, CL07, CL10, CL11, CL13, CL15, CX05, CX06, CX11, CX12, CX13, CX14; `cross_limit` for CL01, CL03, CL04, CL06, CL08, CL14, CX02, CX03, CX04, CX07, CX08, CX15; `post` for CL02, CL09, CL12, CX01, CX09, CX10. Each of the six managers lists 20 parent entry rules, all 15 CL rules and the five CX entry rules that can open on its side, and exits when its parent closes. The side words agree: CL and CX15 signals carry `buy` or `sell`, which is what a manager's direction is matched against. Still to do: read the matcher path for each selected rule and manager against this plan and finish whatever wiring it lacks. Nothing was run.
 
 - [x] **3.** A strategy is a rule that opens and closes a trade. Each rule is a file in git; each change is a commit. DECIDED
 
