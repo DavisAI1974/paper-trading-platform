@@ -84,6 +84,12 @@
 
   **In progress.** The strategy adapter uses ROOT calculations on replay. PR 5 feeds captured MBO through the same session. Live operation is unproven.
 
+  **Claude's review, November 24, on Greg's word to finish what was open. Read from the code; nothing run, nothing changed.** [The report](https://github.com/DavisAI1974/markets-data/blob/ccr-39e0401c-g5omlm/tasks/family-research-20261022/research-union-current/paper-trading-20261123/review-20261124/run60-item1-9-live-run-path.md) What it found in place: quote runs, legs, the calendar and the book are ROOT's own functions and classes, called as they are; `root/` and `crypto_ng/` are not changed by this branch, and their files are byte for byte those of the Markets checkout the session holds; the two windows are the declared 60 and 20 seconds, read at each tick's own receive nanosecond with no time grid; no mid price is formed on the live path.
+
+  **FOR GREG: the two lines are kept by the platform's own code.** The rule for the paper runner is that it may call `crypto_ng.tick.reads` and `line` exactly as they are and copy nothing. The live path calls `line` and takes the two spans from `crypto_ng`, but it keeps the span of trades itself (`inputs.py`, `Flow`) and does not call `reads`, which works on a whole trade day at once and cannot be called tick by tick. By reading, `Flow` does what `reads` does: the window runs from just after t minus the span through t, a trade leaving at the same nanosecond as one arriving leaves first, only trades with a side count, and it starts empty at the trade day's open. That the two give the same figures on the same tape can only be shown by running both, which has not been done.
+
+  **Open, not changed.** (a) When one side of the book is empty the live path starts the quote runs afresh and records nothing; ROOT stops with an error on such a tick. None occurs on the four trade days. (b) The best bid and ask that feed every calculation are read from the NautilusTrader mirror, not from ROOT's own book; the two are now checked against each other at every UTC date change (item 6). (c) The trade-day gate is written out again in `feed.py` and not called from `root/tape.py`; by reading it is the same test.
+
 - [x] **10.** Dipole and exhaustion are the crypto formulas on the natural gas tape (60 and 20 seconds), read at the nanosecond. DECIDED
 
   **Our build.** The adapter uses the crypto calculation code for both tape-clock windows. [Strategy inputs](../../paper_platform/inputs.py)
