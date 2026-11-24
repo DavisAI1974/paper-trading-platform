@@ -26,7 +26,7 @@ $definition
 <div id="chart-box"><canvas id="chart-canvas" role="img" aria-label="The price the market traded at over tape time, and the prices of this run's paper fills"></canvas><div id="chart-tip" hidden></div></div>
 <small><span class="sw" style="background:#3987e5;margin-left:0"></span>Market traded price<span class="sw" style="background:#d95926"></span>Our paper fills</small>
 <small id="chart-last" role="status"></small>
-<small>Tape time on the Eastern clock, drawn as the tape goes by. Market line: every trade of the tape, at its own price and its own nanosecond time. Our line: each paper fill at its own price. Each line stays level at its last price until the next one, as a price does between trades; only the corners are rounded. No mid price is drawn or computed.</small></section>
+<small>Tape time on the Eastern clock, drawn as the tape goes by. Market line: every trade of the tape, at its own price and its own nanosecond time. Our line: each paper fill at its own price, without the closes the run's own stop makes (they are not trade data). Each line stays level at its last price until the next one, as a price does between trades; only the corners are rounded. No mid price is drawn or computed.</small></section>
 $trade_section
 <section id="events" data-stream="$stream" aria-label="Trading events">$cards</section>
 <div id="earlier-events">$earlier</div>
@@ -123,7 +123,8 @@ function draw(){
   const newest=Math.max(prints.length?prints[prints.length-1][0]:0,fills.length?fills[fills.length-1][0]:0);
   const oldest=Math.min(prints.length?prints[0][0]:newest,fills.length?fills[0][0]:newest);
   const end=newest,start=minutes?Math.max(oldest,end-minutes*60000):oldest;
-  const market=prints.filter(p=>p[0]>=start),ours=fills.filter(f=>f[0]>=start);
+  // The closes a run's own stop makes are not trade data and are left off the line: sent all at once, they walk through the book.
+  const market=prints.filter(p=>p[0]>=start),ours=fills.filter(f=>f[0]>=start&&f[5]);
   let lo=Infinity,hi=-Infinity;
   for(const row of market){lo=Math.min(lo,row[1]);hi=Math.max(hi,row[1])}
   for(const row of ours){lo=Math.min(lo,row[1]);hi=Math.max(hi,row[1])}
