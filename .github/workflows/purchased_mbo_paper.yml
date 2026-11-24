@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       execution_plan:
-        description: Agent-authored execution plan JSON (instrument, Databento instrument ID and per-rule instructions)
+        description: Committed agent plan filename or inline execution plan JSON
         type: string
         required: true
       market:
@@ -73,5 +73,4 @@ jobs:
           PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
         run: |
-          printf '%s' "$EXECUTION_PLAN" > "$RUNNER_TEMP/agent-plan.json"
-          python -B -m paper_platform.run --execution-plan "$RUNNER_TEMP/agent-plan.json" --greg-go --data purchased-inputs --market "$MARKET" --trade-day "$TRADE_DAY" --message-budget "$MESSAGE_BUDGET" --event-budget "$EVENT_BUDGET"
+          python -B -m paper_platform.run --agent-plan "$EXECUTION_PLAN" --greg-go --data purchased-inputs --market "$MARKET" --trade-day "$TRADE_DAY" --message-budget "$MESSAGE_BUDGET" --event-budget "$EVENT_BUDGET"

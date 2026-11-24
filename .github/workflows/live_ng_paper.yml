@@ -7,7 +7,7 @@ on:
         type: boolean
         default: false
       execution_plan:
-        description: Agent-authored execution plan JSON
+        description: Committed agent plan filename or inline execution plan JSON
         type: string
         required: true
       event_budget:
@@ -76,7 +76,6 @@ jobs:
           python -m paper_platform.record_mbo --data purchased-inputs --trade-day "$TRADE_DAY" --source "$SOURCE" --message-budget "$DELIVERY_BUDGET" --greg-go &
           recorder_pid=$!
           trap 'kill -TERM "$recorder_pid" "${paper_pid:-}" 2>/dev/null || true' INT TERM EXIT
-          printf '%s' "$EXECUTION_PLAN" > "$RUNNER_TEMP/agent-plan.json"
           db=$(python -c 'import os; from datetime import date; from root.calendar import week_sunday; print("purchased-inputs/paper-trading/captures/nymex-ng/"+str(week_sunday(date.fromisoformat(os.environ["TRADE_DAY"])))+"/live.sqlite")')
           # Wait for this workflow's writer, including when an older checkpoint was restored.
           python - "$db" "$recorder_pid" <<'PY'
@@ -96,7 +95,7 @@ jobs:
                           break
               time.sleep(0.2)
           PY
-          python -m paper_platform.run --greg-go --data purchased-inputs --trade-day "$TRADE_DAY" --market nymex-ng --message-budget "$DELIVERY_BUDGET" --event-budget "$EVENT_BUDGET" --execution-plan "$RUNNER_TEMP/agent-plan.json" --capture "$db" &
+          python -m paper_platform.run --greg-go --data purchased-inputs --trade-day "$TRADE_DAY" --market nymex-ng --message-budget "$DELIVERY_BUDGET" --event-budget "$EVENT_BUDGET" --agent-plan "$EXECUTION_PLAN" --capture "$db" &
           paper_pid=$!
           set +e
           wait -n -p finished "$paper_pid" "$recorder_pid" "$backup_pid"
