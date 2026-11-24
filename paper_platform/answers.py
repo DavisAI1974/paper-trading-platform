@@ -117,7 +117,8 @@ class MailboxDecider:
         box = self.folder / f"q-{sequence}"
         box.mkdir(parents=True, exist_ok=False)
         temporary = box / "question.json.part"
-        temporary.write_text(json.dumps(question, sort_keys=True, indent=2), encoding="utf8")
+        with temporary.open("w", encoding="utf8") as out:  # straight to the file: the text is never built twice
+            json.dump(question, out, sort_keys=True, indent=2)
         os.replace(temporary, box / "question.json")
         answer_file = box / "answer.json"
         deadline = self.clock() + self.timeout_s

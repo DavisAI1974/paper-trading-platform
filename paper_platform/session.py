@@ -550,17 +550,27 @@ class Session:
         if lines is not None:
             question["lines"] = extra["lines"] = lines
         state, why = self._state_at(e)
+        digest_ = None
+        if state is not None:
+            try:
+                # The one serialization of the state: plain JSON (no NaN) or no state; the digest is of this text.
+                digest_ = hashlib.sha256(json.dumps(state, sort_keys=True, separators=(",", ":"),
+                                                    allow_nan=False).encode()).hexdigest()
+            except Exception as error:
+                state, why = None, f"the state could not be written as JSON: {type(error).__name__}"
         if state is None:
             extra["state_left_out"] = why
         else:
             question["state"] = state
             book = state["book"]
+            window = state.get("mbo_window")
             extra.update(
-                state_sha256=hashlib.sha256(
-                    json.dumps(state, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+                state_sha256=digest_,
                 book_levels_bid=None if book is None else len(book["bid"]),
                 book_levels_ask=None if book is None else len(book["ask"]),
-                inputs_named=sum(len(state["inputs"][k]) for k in ("strategy_inputs", "tick")))
+                inputs_named=sum(len(state["inputs"][k]) for k in ("strategy_inputs", "tick")),
+                mbo_window_messages=None if window is None else window["count"],
+                rules_named=len(state.get("rules") or ()), conditions_named=len(state.get("conditions") or ()))
         self.write("question", signal_sequence=sequence, rule=e["rule"], side=e.get("side"),
                    trade_id=e["trade_id"], received=e.get("received"), exchange=e.get("exchange"), **extra)
         self.decided["asked"] += 1
@@ -648,7 +658,6 @@ class Session:
             conditions = self._conditions_state(t, left_out)
             state = dict(inputs=inputs, book=book, rules=rules, paper=paper, mbo_window=mbo_window,
                          conditions=conditions, known_at_tape_ns=t["received"], left_out=left_out)
-            json.dumps(state, allow_nan=False)  # plain JSON or nothing
             return state, None
         except Exception as error:
             return None, f"reading the state raised {type(error).__name__}"

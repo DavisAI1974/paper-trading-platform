@@ -695,3 +695,33 @@ def test_conditions_hold_each_named_item_and_no_label():
     state, why = s._state_at(dict(position=11, received=opens - 5))
     assert why is None and state["conditions"]["instrument"] is None and state["conditions"]["counts"] is None
     assert any(x["name"] == "conditions.instrument" for x in state["left_out"])
+
+
+def test_the_row_counts_the_layers_and_the_whole_question_round_trips_through_the_mailbox(tmp_path):
+    from types import SimpleNamespace
+    from paper_platform.answers import MailboxDecider
+    seen, rows = [], []
+
+    class Mail:
+        def ask(self, question):
+            seen.append(question)
+            return MailboxDecider(tmp_path, 5, 0, sleep=lambda _: (tmp_path / f"q-{question['sequence']}" / "answer.json")
+                                  .write_text(json.dumps(dict(action="skip", by="x", asked_at_sequence=question["sequence"])))).ask(question)
+
+    s = gate_session(Mail(), rows)
+    s.last = _stand_last_message()
+    s.engine = SimpleNamespace(last=dict(position=11, received=5, exchange=4, settlement=False), p=None, open={},
+                               inputs=_Stand(dipole=_Stand(width=60 * 10**9), exhaustion=_Stand(width=20 * 10**9)))
+    s._mbo = [dict(position_on_tape=11, raw=dict(ts_recv=5, action="T"), period="stand-in", in_session=True)]
+    s.decider_mbo_window_s, s.decider_mbo_window_ns = 60, 60 * 10**9
+    s.record(dict(action="open", rule="CL01", side="buy", trade_id="t1", position=11, received=5, exchange=4))
+    row = rows[1]
+    assert row["mbo_window_messages"] == 1 and row["rules_named"] >= 1 and row["conditions_named"] >= 1
+    assert "state" not in row and "mbo_window" not in row
+    written = json.loads((tmp_path / "q-0" / "question.json").read_text())
+    assert written == json.loads(json.dumps(seen[0])) and len(written["state"]["mbo_window"]["messages"]) == 1
+    assert not list(tmp_path.glob("q-*/*.part"))
+    # a state that cannot be written as plain JSON is dropped and named; the run goes on
+    s._state_at = lambda e: (dict(book=None, inputs=dict(strategy_inputs={}, tick={}), bad=float("nan")), None)
+    s.record(dict(action="open", rule="CL01", side="buy", trade_id="t2", position=11, received=5, exchange=4))
+    assert "state" not in seen[1] and "JSON" in rows[-2]["state_left_out"]
