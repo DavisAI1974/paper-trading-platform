@@ -114,7 +114,7 @@
 
 - [ ] **25.** The same events appended to the git record in markets-data, pushed every minute and at once on every order and fill. DECIDED
 
-  **In progress.** The publisher targets markets-data on orders and each minute. PR 5 snapshots each tick containing orders or fills for publication to markets-data. A retry pushes the pending commit before capturing any newer journal state. Git and relay delivery are attempted independently at shutdown. Operational evidence is pending.
+  **Built in draft, awaiting publication evidence.** Each journaled order and fill queues its exact event-file and receive-time boundaries for a distinct Git commit on the run’s markets-data branch. The watchdog schedules a snapshot every minute independently of Render. The Git worker publishes in order and retries the same commit after an ambiguous push. The runner waits for outstanding order and fill pushes before admitting the next tick. Shutdown drains administrative events and publishes the receipt. An authorized run is still needed to observe the remote commit sequence and timing.
 
 - [ ] **26.** A phone notice for: a budget stop, a run stop, a failure. The live store and the notice service are named to Greg before anything is set up. OPEN
 

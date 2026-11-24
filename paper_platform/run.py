@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 import requests
 from .api import wire
 from .causal_gate import PreflightDeadline
+from .journal_publication import GitJournal
 from .session import Session, git
 from .run_clock import CLOCK_STOP, LIMIT_SECONDS, run_start_ns
 from root.calendar import trade_day_bounds
@@ -58,10 +59,6 @@ class Publication:
         self.s = session
         self.url = url
         self.push_url = push_url
-        self.last_push = time.monotonic()
-        self.commit = None
-        self.tree = None
-        self.published_commit = None
         self.http = requests.Session()
         self.http.headers["Authorization"] = "Bearer " + os.environ["PAPER_RELAY_TOKEN"]
         self.env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
@@ -72,7 +69,6 @@ class Publication:
                 GIT_CONFIG_KEY_0=f"http.{push_url}.extraheader",
                 GIT_CONFIG_VALUE_0="AUTHORIZATION: basic " + basic,
             )
-        self.branch = "paper-runs/" + session.run
 
     def command(self, *args, read_output=False):
         proc = subprocess.run(
@@ -86,38 +82,6 @@ class Publication:
         if proc.returncode:
             raise RuntimeError("markets-data git " + args[0] + " failed")
         return proc.stdout.strip() if read_output else None
-
-    def publish_commit(self):
-        self.command("push", self.push_url, self.commit + ":refs/heads/" + self.branch)
-        self.published_commit = self.commit
-
-    def push(self):
-        if self.tree is not None and self.published_commit != self.commit:
-            self.publish_commit()
-        s = self.s
-        path = s.folder.relative_to(s.data_root).as_posix()
-        if self.commit is None:
-            git_dir = Path(self.command("rev-parse", "--absolute-git-dir", read_output=True))
-            self.env["GIT_INDEX_FILE"] = str(git_dir / ("paper-index-" + s.run))
-            base = self.command("rev-parse", "HEAD", read_output=True)
-            self.command("read-tree", base)
-            self.commit = base
-        # Freeze the journal and receive sidecar together. The commit consumes this
-        # tree even if a watchdog subsequently records a stop or administrative fill.
-        with s.lock:
-            if not s.receives.closed:
-                s.receives.flush()
-            self.command("add", "--sparse", "--", path)
-            tree = self.command("write-tree", read_output=True)
-        if tree != self.tree:
-            self.commit = self.command(
-                "-c", "user.name=NG Paper Recorder", "-c", "user.email=paper@users.noreply.github.com",
-                "commit-tree", tree, "-p", self.commit, "-m", "Append paper events [skip ci]", read_output=True,
-            )
-            self.tree = tree
-        if self.published_commit != self.commit:
-            self.publish_commit()
-        self.last_push = time.monotonic()
 
     def send(self, event):
         response = self.http.post(
@@ -186,7 +150,7 @@ class Publication:
             raise RuntimeError("Render journal recovery failed")
 
 
-def pace_to_record(session, received, base, stopped, publication, deliver):
+def pace_to_record(session, received, base, stopped, publication=None, deliver=None):
     """Release due timers against the tape clock even when there is no intervening print."""
     while session.state == "active" and not stopped.is_set() and not session.due():
         with session.lock:
@@ -196,11 +160,12 @@ def pace_to_record(session, received, base, stopped, publication, deliver):
         remaining = base + target - time.monotonic_ns()
         if remaining > 0:
             stopped.wait(min(0.25, remaining / 1e9))
-            if time.monotonic() - publication.last_push >= 60:
+            if publication is not None and time.monotonic() - publication.last_push >= 60:
                 publication.push()
         elif timer_first:
             session.advance_clock(expiry)
-            deliver()
+            if deliver is not None:
+                deliver()
         else:
             return
 
@@ -257,7 +222,7 @@ def main():
         push_url = writer_remote(args.data)
     except ValueError as error:
         p.error(str(error))
-    s = pub = relay_worker = None
+    s = pub = journal = None
     finished = threading.Event()
     alert_sent = threading.Event()
     why = "failure"
@@ -287,11 +252,18 @@ def main():
             execution_plan=execution_plan, plan_source=plan_source,
         )
         pub = Publication(s, url, push_url)
-        relay_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="render-journal")
         pending = deque()
-        s.on_event = pending.append
         with (s.folder / "events.jsonl").open(encoding="utf8") as f:
             pending.extend(json.loads(row) for row in f)
+        writer = GitJournal(s, pub)
+
+        def record_event(event):
+            pending.append(event)
+            writer.on_event(event)
+
+        s.on_event = record_event
+        writer.start()
+        journal = writer
         stopped = threading.Event()
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, lambda *_: stopped.set())
@@ -302,6 +274,11 @@ def main():
         def guard():
             while not finished.wait(0.25):
                 if s.state != "active":
+                    return
+                try:
+                    journal.minute_if_due()
+                except OSError:
+                    s.stop("markets-data snapshot failed")
                     return
                 end = None
                 if s.captured and args.capture_connection is not None:
@@ -331,16 +308,8 @@ def main():
         watcher.start()
 
         def deliver():
-            with s.lock:
-                urgent = any(event["kind"] in ("paper order", "fill") for event in pending)
-            if urgent or time.monotonic() - pub.last_push >= 60:
-                delivery = relay_worker.submit(pub.deliver_pending, pending)
-                try:
-                    pub.push()
-                finally:
-                    delivery.result()
-            else:
-                pub.deliver_pending(pending)
+            pub.deliver_pending(pending)
+            journal.wait_for_orders()
 
         while s.state == "active":
             if stopped.is_set():
@@ -364,9 +333,9 @@ def main():
                     received = int(r["ts_recv"])
                     if base is None:
                         base = time.monotonic_ns() - received
-                    pace_to_record(s, received, base, stopped, pub, deliver)
+                    pace_to_record(s, received, base, stopped, deliver=deliver)
                 elif base is not None and not s.engine.ended and i >= f.vendor_snapshot and int(r["ts_event"]) >= halts:
-                    pace_to_record(s, int(r["ts_recv"]), base, stopped, pub, deliver)
+                    pace_to_record(s, int(r["ts_recv"]), base, stopped, deliver=deliver)
             if stopped.is_set() or s.due():
                 continue
             s.step(s.cursor)
@@ -403,21 +372,20 @@ def main():
                 notify(s.stop_notice() if s is not None else why, s.run if s else "preflight")
         except Exception:
             errors.append("phone")
-        if pub is not None:
-            delivery = None
-            if relay_worker is not None:
-                delivery = relay_worker.submit(pub.deliver_pending, pending, final=True)
-            try:
-                pub.push()
-            except Exception:
-                errors.append("git")
-            if delivery is not None:
+        if journal is not None:
+            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="render-journal") as relay:
+                delivery = relay.submit(pub.deliver_pending, pending, final=True)
+                try:
+                    journal.finish()
+                except Exception:
+                    errors.append("git")
+                else:
+                    if journal.error is not None or s.state == "markets-data snapshot failed":
+                        errors.append("live Git delivery (final journal recovered)")
                 try:
                     delivery.result()
                 except Exception:
                     errors.append("relay")
-                finally:
-                    relay_worker.shutdown()
         if errors:
             try:
                 notify("failure during shutdown: " + ", ".join(errors), s.run if s else "preflight")

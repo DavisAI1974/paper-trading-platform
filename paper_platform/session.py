@@ -280,9 +280,9 @@ class Session:
                 self.last = message
                 if self.captured:
                     self.capture_frame_hash.update(bytes.fromhex(message["source_sha256"]))
+                self.receives.write(struct.pack("<Q", message["received_by_capture_ns" if self.captured else "received_by_replay_ns"]))
                 if self.execution:
                     self.execution.market(message)
-                self.receives.write(struct.pack("<Q", message["received_by_capture_ns" if self.captured else "received_by_replay_ns"]))
                 if self.execution and self.events >= self.output_budget:
                     self.stop("budget reached")
                     return None

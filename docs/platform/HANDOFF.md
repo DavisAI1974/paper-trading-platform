@@ -23,6 +23,8 @@ Start with **17**. Work in the order below, one number at a time. If the current
 
 ## Codex's current item
 
+**25 · Git publication.** Each order and fill queues a separate, byte-bounded journal snapshot. The watchdog also schedules minute snapshots while the phone relay is busy. A single worker pushes them in order and includes the final receipt. Operational evidence from markets-data is pending.
+
 **24 · Real-time phone view.** The default page follows the latest run, including after a stop. A run selected from history stays pinned. The draft adds earlier-event paging, visible run-wide status under strategy filters and concurrent Render and Git delivery. Hosted delivery remains open.
 
 **20 · The 5.75-hour stop.** The draft shares one Actions clock across startup, capture and paper execution. Terminal records carry the remaining orders, contracts and any shutdown errors. The implementation awaits authorized operational evidence.
