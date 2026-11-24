@@ -12,7 +12,7 @@ form{display:flex;gap:.7rem;align-items:end;flex-wrap:wrap;margin:1rem 0}label{d
 details li{overflow-wrap:anywhere}a{color:#9ce6ba}
 .spec{white-space:pre-wrap;color:#ccdad7}summary{cursor:pointer}
 #chart h2{margin:.8rem 0 .3rem}#chart-ranges{display:flex;gap:.5rem;margin:.3rem 0}#chart-ranges button[aria-pressed=true]{border-color:#9ce6ba;color:#9ce6ba}
-#chart-box{position:relative}#chart-canvas{display:block;width:100%;height:16rem;touch-action:pan-y}
+#chart-box{position:relative}#chart-canvas{display:block;width:100%;height:17rem;touch-action:pan-y}
 #chart-tip{position:absolute;top:.3rem;left:.3rem;padding:.3rem .5rem;background:#1b292a;border:1px solid #70817b;border-radius:.3rem;font-size:.85rem;pointer-events:none}
 #chart-tip b{color:#edf1ee}.sw{display:inline-block;width:.9rem;height:.2rem;vertical-align:middle;margin:0 .3rem 0 .6rem}
 </style><script defer src="/static/htmx-2.0.8/htmx.min.js"></script></head><body hx-history="false">
@@ -94,7 +94,8 @@ const canvas=document.getElementById('chart-canvas'),ctx=canvas.getContext('2d')
 const tip=document.getElementById('chart-tip'),last=document.getElementById('chart-last');
 const MUTED='#b5c6c5',GRID='#344146',SURFACE='#10191c',MARKET='#3987e5',OURS='#d95926';
 let prints=[],fills=[],run='',nextPrint=-1,nextSeq=-1,scale=1,unit='',minutes=5,pointer=null,busy=false,view=null;
-const clock=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+const clock=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});
+const clockMinutes=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
 const price=v=>(v/scale).toFixed(3);
 function curve(series,x,y,color,right){
   // The last price holds level until the next one, as a price does between trades; only the corners are rounded.
@@ -128,19 +129,35 @@ function draw(){
   for(const row of ours){lo=Math.min(lo,row[1]);hi=Math.max(hi,row[1])}
   if(lo===Infinity) return;
   const pad=Math.max((hi-lo)*0.08,scale/1000);lo-=pad;hi+=pad;
-  const L=6,R=w-52,T=8,B=h-20,span=Math.max(end-start,1);
+  const L=50,R=w-10,T=8,B=h-24,span=Math.max(end-start,1);
   const x=t=>L+(t-start)/span*(R-L),y=v=>T+(hi-v)/(hi-lo)*(B-T);
-  ctx.font='12px system-ui,sans-serif';ctx.textBaseline='middle';ctx.lineWidth=1;
-  for(let i=0;i<=3;i++){
-    const v=lo+(hi-lo)*i/3,gy=Math.round(y(v))+0.5;
+  ctx.font='12px system-ui,sans-serif';ctx.lineWidth=1;
+  // Price along the left side of the frame, at whole ticks of the contract.
+  const tick=scale/1000,priceStep=Math.max(1,Math.ceil((hi-lo)/(4*tick)))*tick;
+  ctx.textBaseline='middle';ctx.textAlign='right';
+  for(let v=Math.ceil(lo/priceStep)*priceStep;v<=hi;v+=priceStep){
+    const gy=Math.round(y(v))+0.5;
     ctx.strokeStyle=GRID;ctx.beginPath();ctx.moveTo(L,gy);ctx.lineTo(R,gy);ctx.stroke();
-    ctx.fillStyle=MUTED;ctx.textAlign='left';ctx.fillText(price(v),R+5,gy);
+    ctx.strokeStyle=MUTED;ctx.beginPath();ctx.moveTo(L-4,gy);ctx.lineTo(L,gy);ctx.stroke();
+    ctx.fillStyle=MUTED;ctx.fillText(price(v),L-7,gy);
   }
-  ctx.textBaseline='alphabetic';ctx.fillStyle=MUTED;
-  ctx.textAlign='left';ctx.fillText(clock.format(new Date(start)),L,h-5);
-  ctx.textAlign='right';ctx.fillText(clock.format(new Date(end)),R,h-5);
+  // Time along the bottom side of the frame, at round clock times.
+  const steps=[1,2,5,10,15,30,60,120,300,600,900,1800,3600,7200].map(s=>s*1000);
+  const timeStep=steps.find(s=>span/s<=4)||steps[steps.length-1];
+  ctx.textBaseline='top';
+  for(let at=Math.ceil(start/timeStep)*timeStep;at<=end;at+=timeStep){
+    const gx=Math.round(x(at))+0.5,label=(timeStep<60000?clock:clockMinutes).format(new Date(at));
+    ctx.strokeStyle=GRID;ctx.beginPath();ctx.moveTo(gx,T);ctx.lineTo(gx,B);ctx.stroke();
+    ctx.strokeStyle=MUTED;ctx.beginPath();ctx.moveTo(gx,B);ctx.lineTo(gx,B+4);ctx.stroke();
+    const half=ctx.measureText(label).width/2;
+    ctx.textAlign='left';ctx.fillStyle=MUTED;ctx.fillText(label,Math.min(Math.max(gx-half,L-half),R-2*half),B+7);
+  }
+  // The frame: the four lines round the graph.
+  ctx.strokeStyle=MUTED;ctx.strokeRect(L+0.5,T+0.5,R-L,B-T);
+  ctx.save();ctx.beginPath();ctx.rect(L,T,R-L,B-T);ctx.clip();
   curve(market,x,y,MARKET,R);
   curve(ours,x,y,OURS,R);
+  ctx.restore();
   const words=[];
   if(prints.length){const p=prints[prints.length-1];words.push('Market last traded '+price(p[1])+' at '+clock.format(new Date(p[0])))}
   if(fills.length){const f=fills[fills.length-1];words.push('our last fill '+price(f[1])+' ('+f[4]+' '+f[2]+') at '+clock.format(new Date(f[0])))}
