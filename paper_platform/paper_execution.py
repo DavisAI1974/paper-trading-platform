@@ -92,6 +92,9 @@ class RuleVenue:
     def submit(self, event, placement, quantity, order_id, *, executable=True):
         # A close may cancel orders even if it finds zero filled contracts.
         if not self.tags.claim(order_id):
+            # A tag is never sent twice. The refusal is journaled so that it leaves a trace.
+            self.emit("order status", **event, order_id=order_id, pricing="native L3", submitted=False,
+                      execution_event="order tag already used; not sent")
             return
         style = placement["style"]
         offset = placement["offset_ticks"]
@@ -175,6 +178,9 @@ class PaperExecution:
         planned = plan["rules"]
         if not planned or not planned.keys() <= rules.keys():
             raise ValueError("execution plan contains missing or unknown strategy IDs")
+        if any(not rule.isalnum() for rule in planned):
+            # Order tags join the run, the rule and the trade with "-", so a rule ID holds letters and digits only.
+            raise ValueError("strategy IDs used in order tags must be letters and digits only")
         self.policies = {rule: normalize_order_legs(rule, policy) for rule, policy in planned.items()}
         self.venues = {}
         self.followers = defaultdict(list)
