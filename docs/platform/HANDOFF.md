@@ -23,7 +23,9 @@ Start with **17**. Work in the order below, one number at a time. If the current
 
 ## Codex's current item
 
-**12 · Stored replay.** The replay workflow defaults to the pinned purchased NG archive. It can restore a purchased or live MBO checkpoint from markets-data. A compatible original live-run receipt supplies its agent plan, first decision-eligible cursor, last processed frame and stop reason. The replay starts fresh inventory and writes its own journal. Live/replay parity still needs operational evidence. Codex retains this item.
+**16 · Individual trades.** The full run and each strategy filter now use the same individual trade rows. Each row retains its own orders and partial fills. The change is built in draft and awaits review and merge.
+
+**12 · Stored replay.** The replay workflow defaults to the pinned purchased NG archive. It can restore a purchased or live MBO checkpoint from markets-data. A compatible original live-run receipt supplies its agent plan, first decision-eligible cursor, last processed frame and stop reason. The replay starts fresh inventory and writes its own journal. Receipt replay uses the original platform commit. The manual comparison of two completed journals is implemented. Live/replay parity still needs operational evidence.
 
 **31 · Repeated order tags.** [8ca3f04](https://github.com/DavisAI1974/paper-trading-platform/commit/8ca3f04) put the session-wide tag claim ahead of cancellation, journaling and matching. Strategy, manager and administrative orders share that guard. [3821f1e](https://github.com/DavisAI1974/paper-trading-platform/commit/3821f1e) consolidated stop liquidation per trade. These changes are on the draft branch.
 

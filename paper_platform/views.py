@@ -26,10 +26,13 @@ def prices(row, profile):
 
 
 def trade_card(trade, profile):
-    def leg(label, order):
-        seconds, nanos = divmod(int(order["received"]), 1_000_000_000)
+    def time_at(event):
+        seconds, nanos = divmod(int(event["received"]), 1_000_000_000)
         moment = datetime.fromtimestamp(seconds, ZoneInfo("America/New_York"))
-        at = f"{moment:%Y-%m-%d %H:%M:%S}.{nanos:09d} {moment:%Z}"
+        return f"{moment:%Y-%m-%d %H:%M:%S}.{nanos:09d} {moment:%Z}"
+
+    def leg(label, order):
+        at = time_at(order)
         detail = ""
         if order.get("placement"):
             limit = (" @ " + price(order["limit_price"], profile)) if order.get("limit_price") is not None else ""
@@ -43,33 +46,44 @@ def trade_card(trade, profile):
         return (f"<p><b>{label}</b> · {e(order['rule'])} · {at}</p>{detail}"
                 f"<small>{prices(order, profile)}</small><p>{e(order['reason'])}</p>")
 
-    entry, exit_order = trade["entry"], trade["exit"]
-    fields = [f'<article id="trade-{e(trade["trade_id"])}"><strong>{e(trade["rule"])} · '
-              f'{e((entry or exit_order).get("side", ""))}</strong>']
-    fields.append(leg("Entry order", entry) if entry else "<p>Entry record unavailable</p>")
+    entry = trade["entry"] or trade["entry_signal"]
+    exit_event = trade["exit"] or trade["exit_signal"]
+    first = entry or exit_event
+    rule, key = trade["rule"], trade["trade_id"]
+    side = first.get("side") or first.get("order_side", "")
+    fields = [f'<details id="trade-{e(rule)}-{e(key)}" class="trade-row">'
+              f'<summary>{e(rule)} · {e(side)} · {time_at(first)}</summary><small>Trade · {e(key)}</small>']
+    if entry and (entry["rule"] != rule or entry["kind"] == "signal"):
+        label = "Parent entry" if entry["rule"] != rule else "Entry"
+        fields.append(leg(label + (" order" if entry["kind"] == "paper order" else " signal"), entry))
+    if not entry:
+        fields.append("<p>Entry record unavailable</p>")
     if entry and entry.get("entry_rule"):
         fields.append(f"<small>Entry signal from {e(entry['entry_rule'])} · "
                       f"{e(entry.get('source_trade_id', ''))}</small>")
+    for order in trade["orders"]:
+        if order["action"] == "open":
+            label = "Entry order"
+        elif order.get("trade_data") is False:
+            label = "Administrative close · excluded from trade data"
+        else:
+            label = "Manager exit" if order.get("management_only") else "Exit order"
+        fields.append(leg(label, order))
     if trade["observation"]:
         fields.append(f"<p>{e(trade['observation']['reason'])}</p>")
-    if exit_order is None:
+    if trade["exit"] is None:
+        if trade["exit_signal"]:
+            fields.append(leg("Exit signal", trade["exit_signal"]))
         fields.append("<p>No exit order recorded</p>")
-    else:
-        label = "Exit order"
-        if exit_order.get("trade_data") is False:
-            label = "Administrative close · excluded from trade data"
-        elif exit_order.get("management_only"):
-            label = "Manager exit"
-        fields.append(leg(label, exit_order))
-    if entry and entry.get("pricing") == "native L3":
+    if trade["fills"] or any(order.get("pricing") == "native L3" for order in trade["orders"]):
         fields.append("<p><b>Paper fills</b></p>")
         if not trade["fills"]:
             fields.append("<small>No execution recorded</small>")
         for fill in trade["fills"]:
             fields.append(f"<small>{e(fill['action'])} · {e(fill['side'])} {e(fill['quantity'])} @ "
                           f"{price(fill['fill_price'], profile)} {e(profile['price_unit'])} · "
-                          f"{e(fill['liquidity'])} · {e(fill['received'])} ns</small>")
-    return "".join(fields) + "</article>"
+                          f"{e(fill['liquidity'])} · {time_at(fill)} · Order {e(fill['order_id'])}</small>")
+    return "".join(fields) + "</details>"
 
 
 def card(event, profile):
@@ -186,8 +200,8 @@ def page(market, rule, state, history=(), *, live=True, run="", trades=(), runs=
         trade_section=(
             '<section aria-labelledby="trades-title"><h2 id="trades-title">Trades</h2><div id="trades">'
             + "".join(trade_card(trade, profile) for trade in trades)
-            + '</div><p class="empty-trades">No trades recorded for this strategy.</p></section>'
-            '<h2>Events</h2>' if rule else ""
+            + '</div><p class="empty-trades">No trades recorded.</p></section>'
+            '<h2>Events</h2>' if live or rule else ""
         ),
         cards="".join(card(row, profile) for row in reversed(history)),
         stream=e("/stream?" + query) if live else "",

@@ -57,6 +57,9 @@ def relay():
             CREATE INDEX IF NOT EXISTS paper_order_rule ON events(
                 run, json_extract(body,'$.rule'), sequence
             ) WHERE json_extract(body,'$.kind')='paper order';
+            CREATE INDEX IF NOT EXISTS strategy_trade_events ON events(
+                run, json_extract(body,'$.rule'), json_extract(body,'$.trade_id'), sequence
+            ) WHERE json_extract(body,'$.trade_id') IS NOT NULL;
             CREATE TABLE IF NOT EXISTS sessions(run TEXT PRIMARY KEY, body TEXT NOT NULL, first_ns TEXT NOT NULL);
         """)
 
@@ -152,9 +155,9 @@ def relay():
         return {k: all_rules[k] for k in profiles[market]["rules"]}
 
     @app.get("/api/trades", dependencies=[Depends(viewer)])
-    def trades(rule: str, run: str | None = None, market: str = "nymex-ng"):
+    def trades(rule: str = "", run: str | None = None, market: str = "nymex-ng"):
         profiles = markets()
-        if market not in profiles or rule not in profiles[market]["rules"]:
+        if market not in profiles or (rule and rule not in profiles[market]["rules"]):
             raise HTTPException(404, "unknown market or rule")
         with connect() as db:
             db.execute("BEGIN")
@@ -182,15 +185,17 @@ def relay():
                             "SELECT sequence,body FROM events WHERE run=? AND sequence>? ORDER BY sequence LIMIT 256",
                             (current, cursor),
                         ).fetchall()
-                        if html and rule:
+                        if html:
                             for seq, body in batch:
                                 event = json.loads(body)
-                                if event.get("rule") != rule or not event.get("trade_id"):
+                                if not event.get("trade_id") or (rule and event.get("rule") != rule):
                                     continue
                                 order = event.get("kind") in ("paper order", "fill", "order status")
-                                interrupted = event.get("action") in ("not scored", "observation interrupted")
-                                if order or interrupted:
-                                    match = trade_rows(db, current, rule, trade_id=event["trade_id"], through=seq)
+                                signal = event["kind"] == "signal" and event.get("action") in (
+                                    "open", "close", "exit", "not scored", "observation interrupted"
+                                )
+                                if order or signal:
+                                    match = trade_rows(db, current, event["rule"], trade_id=event["trade_id"], through=seq)
                                     if match:
                                         trade_updates[seq] = match[0]
                 for cursor, body in batch:
@@ -201,7 +206,8 @@ def relay():
                         payload = dict(html=card(event, profile), status=state["status"])
                         if cursor in trade_updates:
                             trade = trade_updates[cursor]
-                            payload.update(trade_id=trade["trade_id"], trade_html=trade_card(trade, profile))
+                            payload.update(trade_id=trade["trade_id"], trade_rule=trade["rule"],
+                                           trade_html=trade_card(trade, profile))
                         data = json.dumps(payload)
                         yield f"id: {current}/{cursor}\nevent: message\ndata: {data}\n\n"
                     else:
@@ -264,7 +270,7 @@ def relay():
                 "ORDER BY sequence DESC LIMIT 100",
                 (state.get("run"), rule, rule),
             ).fetchall()
-            trades = trade_rows(db, state.get("run"), rule) if rule else []
+            trades = trade_rows(db, state.get("run"), rule)
             runs = db.execute(
                 "SELECT run, json_extract(body,'$.trade_day'), json_extract(body,'$.status') "
                 "FROM sessions WHERE json_extract(body,'$.market')=? ORDER BY first_ns DESC LIMIT 50",
