@@ -132,7 +132,9 @@ def trade_card(trade, profile):
             fields.append(f"<small>{e(fill['action'])} · {e(fill['side'])} {e(fill['quantity'])} @ "
                           f"{price(fill['fill_price'], profile)} {e(profile['price_unit'])} · "
                           f"{e(fill['liquidity'])} · {time_at(fill)} · {prices(fill, profile)}"
-                          f" · Order {e(fill['order_id'])}</small>")
+                          f" · Order {e(fill['order_id'])}"
+                          f"{' · Administrative close, excluded from trade data' if fill.get('trade_data') is False else ''}"
+                          "</small>")
     return "".join(fields) + "</details>"
 
 

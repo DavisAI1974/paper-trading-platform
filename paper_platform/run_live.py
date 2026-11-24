@@ -112,8 +112,10 @@ def main():
                     recorder.wait()
             # The reader observes the committed reason (or the writer lock release).
             # Let it journal cancellations, remaining exposure and the terminal receipt.
+            # Each stop order and fill is its own markets-data push, so the wait is long enough for them
+            # and still inside the job's margin after the 5.75-hour stop.
             try:
-                paper.wait(timeout=120)
+                paper.wait(timeout=480)
             except subprocess.TimeoutExpired:
                 finish(paper)
                 return 1

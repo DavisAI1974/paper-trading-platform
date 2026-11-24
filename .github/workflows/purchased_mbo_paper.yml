@@ -45,7 +45,7 @@ jobs:
   paper:
     if: ${{ inputs.greg_go && github.actor == 'DavisAI1974' && github.triggering_actor == 'DavisAI1974' && github.run_attempt == 1 }}
     runs-on: ubuntu-latest
-    timeout-minutes: 355
+    timeout-minutes: 365
     env:
       PLATFORM_ROOT: ${{ github.workspace }}
     steps:
