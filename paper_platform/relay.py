@@ -41,6 +41,9 @@ def relay():
             CREATE INDEX IF NOT EXISTS paper_order_trade ON events(
                 run, json_extract(body,'$.trade_id'), json_extract(body,'$.action')
             ) WHERE json_extract(body,'$.kind')='paper order';
+            CREATE INDEX IF NOT EXISTS trade_interruption ON events(run, json_extract(body,'$.trade_id'), sequence)
+                WHERE json_extract(body,'$.kind')='signal'
+                  AND json_extract(body,'$.action') IN ('not scored','observation interrupted');
             CREATE INDEX IF NOT EXISTS paper_order_rule ON events(
                 run, json_extract(body,'$.rule'), sequence
             ) WHERE json_extract(body,'$.kind')='paper order';
@@ -157,12 +160,14 @@ def relay():
                         if html and rule:
                             for seq, body in batch:
                                 event = json.loads(body)
-                                if event.get("rule") != rule or event.get("kind") != "paper order":
+                                if event.get("rule") != rule or not event.get("trade_id"):
                                     continue
-                                if event.get("action") in ("open", "close", "exit"):
-                                    rows_at_event = trade_rows(db, current, rule, trade_id=event["trade_id"], through=seq)
-                                    if rows_at_event:
-                                        trade_updates[seq] = rows_at_event[0]
+                                order = event.get("kind") == "paper order"
+                                interrupted = event.get("action") in ("not scored", "observation interrupted")
+                                if order or interrupted:
+                                    match = trade_rows(db, current, rule, trade_id=event["trade_id"], through=seq)
+                                    if match:
+                                        trade_updates[seq] = match[0]
                 for cursor, body in batch:
                     event = json.loads(body)
                     if rule and event.get("rule") != rule:

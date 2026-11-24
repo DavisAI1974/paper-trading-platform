@@ -17,7 +17,14 @@ def trade_rows(db, run, rule, *, trade_id=None, through=None):
         where.append("a.sequence<=?")
         params.append(through)
     sql = f"""
-        SELECT a.body, b.body FROM events a
+        SELECT a.body, b.body, (
+            SELECT s.body FROM events s WHERE s.run=a.run
+              AND json_extract(s.body,'$.trade_id')=json_extract(a.body,'$.trade_id')
+              AND json_extract(s.body,'$.kind')='signal'
+              AND json_extract(s.body,'$.action') IN ('not scored','observation interrupted')
+              AND (? IS NULL OR s.sequence<=?)
+            ORDER BY s.sequence DESC LIMIT 1
+        ) FROM events a
         LEFT JOIN events b ON b.run=a.run
           AND json_extract(b.body,'$.kind')='paper order'
           AND json_extract(b.body,'$.trade_id')=coalesce(json_extract(a.body,'$.source_trade_id'),
@@ -29,9 +36,10 @@ def trade_rows(db, run, rule, *, trade_id=None, through=None):
         ORDER BY a.sequence DESC
     """
     rows = []
-    for body, other in db.execute(sql, (through, through, *params)):
+    for body, other, observation in db.execute(sql, (through, through, through, through, *params)):
         order = json.loads(body)
         paired = json.loads(other) if other else None
         entry, exit_order = (paired, order) if order["action"] == "exit" else (order, paired)
-        rows.append(dict(trade_id=order["trade_id"], rule=rule, entry=entry, exit=exit_order))
+        rows.append(dict(trade_id=order["trade_id"], rule=rule, entry=entry, exit=exit_order,
+                         observation=json.loads(observation) if observation else None))
     return rows

@@ -37,6 +37,8 @@ def trade_card(trade, profile):
     fields = [f'<article id="trade-{e(trade["trade_id"])}"><strong>{e(trade["rule"])} · '
               f'{e((entry or exit_order).get("side", ""))}</strong>']
     fields.append(leg("Entry", entry) if entry else "<p>Entry record unavailable</p>")
+    if trade["observation"]:
+        fields.append(f"<p>{e(trade['observation']['reason'])}</p>")
     if exit_order is None:
         fields.append("<p>Open · awaiting exit</p>")
     else:
